@@ -9,6 +9,7 @@ export {
     getSessionDuration,
     getSpeedMetrics,
     getSpeedMetricsCollection,
+    getSubagentTokenMetrics,
     getTokenMetrics
 } from './jsonl-metrics';
 export {

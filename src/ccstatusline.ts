@@ -30,6 +30,7 @@ import { handleHookInput } from './utils/hook-handler';
 import {
     getSessionDuration,
     getSpeedMetricsCollection,
+    getSubagentTokenMetrics,
     getTokenMetrics
 } from './utils/jsonl';
 import { advanceGlobalPowerlineThemeIndex } from './utils/powerline-theme-index';
@@ -127,8 +128,10 @@ async function renderMultipleLines(data: StatusJSON) {
     }
 
     let tokenMetrics: TokenMetrics | null = null;
+    let subagentTokenMetrics: TokenMetrics | null = null;
     if (data.transcript_path) {
         tokenMetrics = await getTokenMetrics(data.transcript_path);
+        subagentTokenMetrics = await getSubagentTokenMetrics(data.transcript_path);
     }
 
     let sessionDuration: string | null = null;
@@ -165,6 +168,7 @@ async function renderMultipleLines(data: StatusJSON) {
     const context: RenderContext = {
         data,
         tokenMetrics,
+        subagentTokenMetrics,
         speedMetrics,
         windowedSpeedMetrics,
         usageData,

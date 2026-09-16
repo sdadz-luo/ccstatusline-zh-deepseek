@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import type {
     SpeedMetrics,
+    TokenBreakdown,
     TokenMetrics,
     TranscriptLine
 } from '../types';
@@ -11,6 +12,7 @@ import {
     getCompactBoundaryPostTokens,
     isCompactBoundary
 } from './compaction';
+import { isDeepSeekPeakHour } from './deepseek-pricing';
 import {
     parseJsonlLine,
     readJsonlLines
@@ -165,6 +167,8 @@ export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetr
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        let peakInputTokens = 0, peakOutputTokens = 0, peakCacheReadTokens = 0, peakCacheCreationTokens = 0;
+        let offPeakInputTokens = 0, offPeakOutputTokens = 0, offPeakCacheReadTokens = 0, offPeakCacheCreationTokens = 0;
         let contextLength = 0;
 
         // Parse each line and sum up token usage for totals.
@@ -211,16 +215,49 @@ export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetr
             })
             : parsedEntries;
 
+        // 第三方代理（如 deepseek）环境下，同一次 API 调用（同一 message.id）会被拆成
+        // thinking/text/tool_use 多条分块记录写入 transcript，且每条都携带完整 usage。
+        // 按 message.id 去重后再累加，否则输入/输出/缓存数字会虚高数倍。
+        const countedMessageIds = new Set<string>();
+
         for (const { data, lineIndex } of entriesToCount) {
             const usage = data.message?.usage;
             if (!usage) {
                 continue;
             }
 
-            inputTokens += usage.input_tokens || 0;
-            outputTokens += usage.output_tokens || 0;
-            cacheReadTokens += usage.cache_read_input_tokens ?? 0;
-            cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
+            const messageId = typeof data.message?.id === 'string' ? data.message.id : null;
+            if (messageId !== null) {
+                if (countedMessageIds.has(messageId)) {
+                    continue;
+                }
+
+                countedMessageIds.add(messageId);
+            }
+
+            const input = usage.input_tokens || 0;
+            const output = usage.output_tokens || 0;
+            const cacheRead = usage.cache_read_input_tokens ?? 0;
+            const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+
+            inputTokens += input;
+            outputTokens += output;
+            cacheReadTokens += cacheRead;
+            cacheCreationTokens += cacheCreation;
+
+            // 按该条 usage 的实际发生时刻分入波峰/波谷桶，用于分段计价
+            const entryTimestamp = parseTimestamp(data.timestamp);
+            if (entryTimestamp && isDeepSeekPeakHour(entryTimestamp)) {
+                peakInputTokens += input;
+                peakOutputTokens += output;
+                peakCacheReadTokens += cacheRead;
+                peakCacheCreationTokens += cacheCreation;
+            } else {
+                offPeakInputTokens += input;
+                offPeakOutputTokens += output;
+                offPeakCacheReadTokens += cacheRead;
+                offPeakCacheCreationTokens += cacheCreation;
+            }
 
             // Track the most recent entry with isSidechain: false (or undefined, which defaults to main chain)
             // Also skip API error messages (synthetic messages with 0 tokens)
@@ -260,7 +297,27 @@ export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetr
         const cachedTokens = cacheReadTokens + cacheCreationTokens;
         const totalTokens = inputTokens + outputTokens + cachedTokens;
 
-        return { inputTokens, outputTokens, cachedTokens, cacheReadTokens, cacheCreationTokens, totalTokens, contextLength };
+        return {
+            inputTokens,
+            outputTokens,
+            cachedTokens,
+            cacheReadTokens,
+            cacheCreationTokens,
+            totalTokens,
+            contextLength,
+            peakBreakdown: {
+                inputTokens: peakInputTokens,
+                outputTokens: peakOutputTokens,
+                cacheReadTokens: peakCacheReadTokens,
+                cacheCreationTokens: peakCacheCreationTokens
+            },
+            offPeakBreakdown: {
+                inputTokens: offPeakInputTokens,
+                outputTokens: offPeakOutputTokens,
+                cacheReadTokens: offPeakCacheReadTokens,
+                cacheCreationTokens: offPeakCacheCreationTokens
+            }
+        };
     } catch {
         return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, contextLength: 0 };
     }
@@ -332,6 +389,9 @@ function normalizeWindowSeconds(value: number | undefined): number | null {
 function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean): CollectedSpeedMetrics {
     const requests: SpeedRequest[] = [];
 
+    // 同一次 API 调用（同一 message.id）的分块记录只算一个请求，避免速度统计虚高
+    const seenRequestIds = new Set<string>();
+
     let lastUserTimestamp: Date | null = null;
     let latestTimestampMs: number | null = null;
 
@@ -359,6 +419,15 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
         }
 
         if (data.type === 'assistant' && data.message?.usage) {
+            const messageId = typeof data.message.id === 'string' ? data.message.id : null;
+            if (messageId !== null) {
+                if (seenRequestIds.has(messageId)) {
+                    continue;
+                }
+
+                seenRequestIds.add(messageId);
+            }
+
             const inputTokens = data.message.usage.input_tokens || 0;
             const outputTokens = data.message.usage.output_tokens || 0;
             let interval: SpeedInterval | null = null;
@@ -522,6 +591,66 @@ function getSubagentTranscriptPaths(transcriptPath: string, referencedAgentIds: 
     }
 
     return matchedPaths;
+}
+
+// 汇总本次会话所有直接子代理（Task 工具派生的 agent）的 token 用量。
+// 子代理 transcript 与主 transcript 同构，复用 getTokenMetrics 的解析/去重/分桶逻辑。
+export async function getSubagentTokenMetrics(transcriptPath: string): Promise<TokenMetrics | null> {
+    let mainLines: string[];
+
+    try {
+        mainLines = await readJsonlLines(transcriptPath);
+    } catch {
+        return null;
+    }
+
+    const referencedSubagentIds = getReferencedSubagentIds(mainLines);
+    const subagentPaths = getSubagentTranscriptPaths(transcriptPath, referencedSubagentIds);
+    if (subagentPaths.length === 0) {
+        return null;
+    }
+
+    const metricsResults = await Promise.all(subagentPaths.map(async subagentPath => getTokenMetrics(subagentPath)));
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheCreationTokens = 0;
+    const peak: TokenBreakdown = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const offPeak: TokenBreakdown = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+
+    for (const metrics of metricsResults) {
+        inputTokens += metrics.inputTokens;
+        outputTokens += metrics.outputTokens;
+        cacheReadTokens += metrics.cacheReadTokens ?? 0;
+        cacheCreationTokens += metrics.cacheCreationTokens ?? 0;
+
+        if (metrics.peakBreakdown) {
+            peak.inputTokens += metrics.peakBreakdown.inputTokens;
+            peak.outputTokens += metrics.peakBreakdown.outputTokens;
+            peak.cacheReadTokens += metrics.peakBreakdown.cacheReadTokens;
+            peak.cacheCreationTokens += metrics.peakBreakdown.cacheCreationTokens;
+        }
+
+        if (metrics.offPeakBreakdown) {
+            offPeak.inputTokens += metrics.offPeakBreakdown.inputTokens;
+            offPeak.outputTokens += metrics.offPeakBreakdown.outputTokens;
+            offPeak.cacheReadTokens += metrics.offPeakBreakdown.cacheReadTokens;
+            offPeak.cacheCreationTokens += metrics.offPeakBreakdown.cacheCreationTokens;
+        }
+    }
+
+    return {
+        inputTokens,
+        outputTokens,
+        cachedTokens: cacheReadTokens + cacheCreationTokens,
+        cacheReadTokens,
+        cacheCreationTokens,
+        totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+        contextLength: 0,
+        peakBreakdown: peak,
+        offPeakBreakdown: offPeak
+    };
 }
 
 export async function getSpeedMetricsCollection(

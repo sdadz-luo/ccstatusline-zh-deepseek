@@ -35,6 +35,9 @@ export interface CompactionData {
 export interface RenderContext {
     data?: StatusJSON;
     tokenMetrics?: TokenMetrics | null;
+    // Summed over the session's subagent transcripts, which the main-session
+    // metrics exclude; SessionCost folds them in to avoid under-reporting cost.
+    subagentTokenMetrics?: TokenMetrics | null;
     speedMetrics?: SpeedMetrics | null;
     windowedSpeedMetrics?: Record<string, SpeedMetrics> | null;
     usageData?: RenderUsageData | null;

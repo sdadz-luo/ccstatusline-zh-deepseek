@@ -6,11 +6,20 @@ export interface TokenUsage {
 }
 
 export interface TranscriptLine {
-    message?: { usage?: TokenUsage; stop_reason?: string | null };
+    message?: { id?: string; usage?: TokenUsage; stop_reason?: string | null };
     isSidechain?: boolean;
     timestamp?: string;
     isApiErrorMessage?: boolean;
     type?: 'user' | 'assistant' | 'system' | 'progress' | 'file-history-snapshot';
+}
+
+// Peak/off-peak split of a token tally. DeepSeek bills by time of day, so tokens
+// are bucketed by the timestamp of the usage record that carried them.
+export interface TokenBreakdown {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
 }
 
 export interface TokenMetrics {
@@ -23,4 +32,7 @@ export interface TokenMetrics {
     cacheCreationTokens?: number;
     totalTokens: number;
     contextLength: number;
+    // Optional so metrics literals built without time-of-day bucketing stay valid.
+    peakBreakdown?: TokenBreakdown;
+    offPeakBreakdown?: TokenBreakdown;
 }
