@@ -389,8 +389,11 @@ function normalizeWindowSeconds(value: number | undefined): number | null {
 function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean): CollectedSpeedMetrics {
     const requests: SpeedRequest[] = [];
 
-    // 同一次 API 调用（同一 message.id）的分块记录只算一个请求，避免速度统计虚高
-    const seenRequestIds = new Set<string>();
+    // 同一次 API 调用（同一 message.id）的分块记录只算一个请求：token 只累加一次，
+    // 区间终点还必须取该消息最后一块的时间戳。代理把一次调用按内容块（thinking /
+    // text / tool_use）拆成多条记录、每块完成时逐条落盘，首块时间戳远早于响应结束，
+    // 用它作分母会漏掉末尾内容块的生成时间，使速度虚高（实测末尾常是大段 tool_use）。
+    const requestIndexById = new Map<string, number>();
 
     let lastUserTimestamp: Date | null = null;
     let latestTimestampMs: number | null = null;
@@ -420,29 +423,44 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
 
         if (data.type === 'assistant' && data.message?.usage) {
             const messageId = typeof data.message.id === 'string' ? data.message.id : null;
-            if (messageId !== null) {
-                if (seenRequestIds.has(messageId)) {
-                    continue;
+            const existingIndex = messageId === null ? undefined : requestIndexById.get(messageId);
+            const entryTimestampMs = entryTimestamp ? entryTimestamp.getTime() : null;
+
+            if (existingIndex !== undefined) {
+                const existing = requests[existingIndex];
+                if (existing && entryTimestampMs !== null) {
+                    if (existing.assistantTimestampMs !== null) {
+                        existing.assistantTimestampMs = Math.max(existing.assistantTimestampMs, entryTimestampMs);
+                    } else {
+                        existing.assistantTimestampMs = entryTimestampMs;
+                    }
+
+                    if (existing.interval) {
+                        existing.interval.endMs = Math.max(existing.interval.endMs, entryTimestampMs);
+                    }
                 }
 
-                seenRequestIds.add(messageId);
+                continue;
+            }
+
+            if (messageId !== null) {
+                requestIndexById.set(messageId, requests.length);
             }
 
             const inputTokens = data.message.usage.input_tokens || 0;
             const outputTokens = data.message.usage.output_tokens || 0;
             let interval: SpeedInterval | null = null;
-            if (entryTimestamp && lastUserTimestamp) {
+            if (entryTimestampMs !== null && lastUserTimestamp) {
                 const startMs = lastUserTimestamp.getTime();
-                const endMs = entryTimestamp.getTime();
-                if (endMs > startMs) {
-                    interval = { startMs, endMs };
+                if (entryTimestampMs > startMs) {
+                    interval = { startMs, endMs: entryTimestampMs };
                 }
             }
 
             requests.push({
                 inputTokens,
                 outputTokens,
-                assistantTimestampMs: entryTimestamp ? entryTimestamp.getTime() : null,
+                assistantTimestampMs: entryTimestampMs,
                 interval
             });
         }

@@ -46,6 +46,7 @@ function makeTranscriptLine(params: {
     type: 'user' | 'assistant';
     input?: number;
     output?: number;
+    id?: string;
     isSidechain?: boolean;
     isApiErrorMessage?: boolean;
 }): string {
@@ -56,6 +57,7 @@ function makeTranscriptLine(params: {
         isApiErrorMessage: params.isApiErrorMessage,
         message: typeof params.input === 'number' || typeof params.output === 'number'
             ? {
+                id: params.id,
                 usage: {
                     input_tokens: params.input ?? 0,
                     output_tokens: params.output ?? 0
@@ -652,6 +654,57 @@ describe('jsonl transcript metrics', () => {
             outputTokens: 300,
             totalTokens: 900,
             requestCount: 3
+        });
+    });
+
+    it('extends the speed interval to the last chunk of a proxied request', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
+        tempRoots.push(root);
+        const transcriptPath = path.join(root, 'speed-proxy-chunks.jsonl');
+
+        // 第三方代理把一次调用按内容块拆成多条记录，每块都带完整 usage：
+        // token 只应计一次，区间终点取末块时间戳（响应此时才结束）
+        fs.writeFileSync(transcriptPath, [
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:00:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_proxy_1',
+                timestamp: '2026-01-01T10:00:05.000Z',
+                type: 'assistant',
+                input: 200,
+                output: 100
+            }),
+            makeTranscriptLine({
+                id: 'msg_proxy_1',
+                timestamp: '2026-01-01T10:00:09.000Z',
+                type: 'assistant',
+                input: 200,
+                output: 100
+            }),
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:01:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_proxy_2',
+                timestamp: '2026-01-01T10:01:04.000Z',
+                type: 'assistant',
+                input: 300,
+                output: 150
+            })
+        ].join('\n'));
+
+        const metrics = await getSpeedMetrics(transcriptPath);
+
+        // 首块口径为 9000ms（5s + 4s），末块口径为 13000ms（9s + 4s）
+        expect(metrics).toEqual({
+            totalDurationMs: 13000,
+            inputTokens: 500,
+            outputTokens: 250,
+            totalTokens: 750,
+            requestCount: 2
         });
     });
 
