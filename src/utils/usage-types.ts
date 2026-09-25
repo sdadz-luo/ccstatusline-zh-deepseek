@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 export const FIVE_HOUR_BLOCK_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// opencode 的用量接口只给重置时刻、不给窗口起点，月度窗口按 30 天近似。该常量只
+// 用于进度条上的时间游标（elapsedPercent），实际重置时刻以接口返回值为准。
+export const MONTHLY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const UsageErrorSchema = z.enum(['no-credentials', 'timeout', 'rate-limited', 'api-error', 'parse-error']);
 export type UsageError = z.infer<typeof UsageErrorSchema>;
@@ -11,6 +14,8 @@ export interface UsageData {
     sessionResetAt?: string; // five_hour.resets_at
     weeklyUsage?: number;   // seven_day.utilization (percentage)
     weeklyResetAt?: string; // seven_day.resets_at
+    monthlyUsage?: number;   // opencode go: usage.monthly.percent (已用百分比)
+    monthlyResetAt?: string; // opencode go: usage.monthly.resetsAt
     weeklySonnetUsage?: number;   // seven_day_sonnet.utilization (percentage)
     weeklySonnetResetAt?: string; // seven_day_sonnet.resets_at
     weeklyOpusUsage?: number;     // seven_day_opus.utilization (percentage)

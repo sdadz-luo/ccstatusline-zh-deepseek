@@ -8,6 +8,13 @@ import * as path from 'path';
 import { z } from 'zod';
 
 import { getClaudeConfigDir } from './claude-settings';
+import {
+    OPENCODE_USAGE_API_HOST,
+    OPENCODE_USAGE_API_PATH,
+    getOpenCodeUsageToken,
+    isOpenCodeUsageSource,
+    parseOpenCodeUsageResponse
+} from './opencode-usage';
 import type {
     UsageData,
     UsageDataField,
@@ -30,6 +37,19 @@ const MACOS_USAGE_CREDENTIALS_SERVICE = 'Claude Code-credentials';
 const MACOS_SECURITY_DUMP_MAX_BUFFER = 8 * 1024 * 1024;
 
 export interface FetchUsageDataOptions { requiredFields?: readonly UsageDataField[] }
+
+// Which usage backend this process reads. An opencode gateway base URL is
+// authenticated with a plain API key and has its own usage endpoint; anything
+// else goes through Claude Code's OAuth token.
+type UsageSource = 'claude' | 'opencode';
+
+function getCurrentUsageSource(): UsageSource {
+    return isOpenCodeUsageSource() ? 'opencode' : 'claude';
+}
+
+function getUsageSourceToken(source: UsageSource): string | null {
+    return source === 'opencode' ? getOpenCodeUsageToken() : getUsageToken();
+}
 
 const EXTRA_USAGE_DETAIL_FIELDS = new Set<UsageDataField>([
     'extraUsageLimit',
@@ -74,6 +94,8 @@ const CachedUsageDataSchema = z.object({
     sessionResetAt: z.string().nullable().optional(),
     weeklyUsage: z.number().nullable().optional(),
     weeklyResetAt: z.string().nullable().optional(),
+    monthlyUsage: z.number().nullable().optional(),
+    monthlyResetAt: z.string().nullable().optional(),
     weeklySonnetUsage: z.number().nullable().optional(),
     weeklySonnetResetAt: z.string().nullable().optional(),
     weeklyOpusUsage: z.number().nullable().optional(),
@@ -88,7 +110,14 @@ const CachedUsageDataSchema = z.object({
     error: z.string().nullable().optional()
 });
 
-const CachedTokenHashSchema = z.object({ tokenHash: z.string().optional() });
+// The cache metadata. tokenHash invalidates the cache on a credential switch
+// (logout/login, a rotated key); source invalidates it when the usage source
+// changes (Claude OAuth <-> the opencode gateway), since the same field names
+// carry different numbers on each side.
+const CachedUsageMetaSchema = z.object({
+    tokenHash: z.string().optional(),
+    source: z.string().optional()
+});
 
 const UsageApiBucketSchema = z.looseObject({
     utilization: z.number().nullable().optional(),
@@ -198,6 +227,8 @@ function parseCachedUsageData(rawJson: string): UsageData | null {
         sessionResetAt: parsed.sessionResetAt ?? undefined,
         weeklyUsage: parsed.weeklyUsage ?? undefined,
         weeklyResetAt: parsed.weeklyResetAt ?? undefined,
+        monthlyUsage: parsed.monthlyUsage ?? undefined,
+        monthlyResetAt: parsed.monthlyResetAt ?? undefined,
         weeklySonnetUsage: parsed.weeklySonnetUsage ?? undefined,
         weeklySonnetResetAt: parsed.weeklySonnetResetAt ?? undefined,
         weeklyOpusUsage: parsed.weeklyOpusUsage ?? undefined,
@@ -221,8 +252,15 @@ function fingerprintUsageToken(token: string): string {
     return createHash('sha256').update(token).digest('hex').slice(0, 16);
 }
 
-function readCachedTokenHash(rawJson: string): string | undefined {
-    return parseJsonWithSchema(rawJson, CachedTokenHashSchema)?.tokenHash;
+function readCachedUsageMeta(rawJson: string): z.infer<typeof CachedUsageMetaSchema> {
+    return parseJsonWithSchema(rawJson, CachedUsageMetaSchema) ?? {};
+}
+
+// Caches written before the opencode source existed carry no source field; they
+// can only have come from the Claude path, so treat a missing source as 'claude'
+// rather than dropping a usable cache once.
+function cachedSourceMatches(rawJson: string, source: UsageSource): boolean {
+    return (readCachedUsageMeta(rawJson).source ?? 'claude') === source;
 }
 
 function tokenHashMatches(cachedHash: string | undefined, currentHash: string | null): boolean {
@@ -358,9 +396,10 @@ function getStaleUsageOrError(
     now: number,
     currentTokenHash: string | null,
     errorCacheMaxAge = LOCK_MAX_AGE,
-    requiredFields: readonly UsageDataField[] = []
+    requiredFields: readonly UsageDataField[] = [],
+    source: UsageSource = 'claude'
 ): UsageData {
-    const stale = readStaleUsageCache(currentTokenHash);
+    const stale = readStaleUsageCache(currentTokenHash, source);
     if (stale && !stale.error && hasRequiredUsageFields(stale, requiredFields)) {
         return cacheUsageData(stale, now);
     }
@@ -525,10 +564,11 @@ export function getUsageToken(): string | null {
         ?? readUsageTokenFromCredentialsFile();
 }
 
-function readStaleUsageCache(currentTokenHash: string | null): UsageData | null {
+function readStaleUsageCache(currentTokenHash: string | null, source: UsageSource): UsageData | null {
     try {
         const rawCache = fs.readFileSync(CACHE_FILE, 'utf8');
-        if (!tokenHashMatches(readCachedTokenHash(rawCache), currentTokenHash)) {
+        if (!tokenHashMatches(readCachedUsageMeta(rawCache).tokenHash, currentTokenHash)
+            || !cachedSourceMatches(rawCache, source)) {
             return null;
         }
         return parseCachedUsageData(rawCache);
@@ -628,17 +668,28 @@ function getUsageApiProxyUrl(): string | null {
     return proxyUrl ?? null;
 }
 
-function getUsageApiRequestOptions(token: string): https.RequestOptions | null {
+// Only the Claude OAuth endpoint wants the beta flag; the opencode gateway is a
+// plain bearer-auth JSON endpoint.
+function getUsageApiEndpoint(source: UsageSource): { hostname: string; path: string; headers: Record<string, string> } {
+    if (source === 'opencode') {
+        return { hostname: OPENCODE_USAGE_API_HOST, path: OPENCODE_USAGE_API_PATH, headers: {} };
+    }
+
+    return { hostname: USAGE_API_HOST, path: USAGE_API_PATH, headers: { 'anthropic-beta': 'oauth-2025-04-20' } };
+}
+
+function getUsageApiRequestOptions(token: string, source: UsageSource): https.RequestOptions | null {
     const proxyUrl = getUsageApiProxyUrl();
+    const endpoint = getUsageApiEndpoint(source);
 
     try {
         return {
-            hostname: USAGE_API_HOST,
-            path: USAGE_API_PATH,
+            hostname: endpoint.hostname,
+            path: endpoint.path,
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${token}`,
-                'anthropic-beta': 'oauth-2025-04-20'
+                Authorization: `Bearer ${token}`,
+                ...endpoint.headers
             },
             timeout: USAGE_API_TIMEOUT_MS,
             ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {})
@@ -648,7 +699,7 @@ function getUsageApiRequestOptions(token: string): https.RequestOptions | null {
     }
 }
 
-async function fetchFromUsageApi(token: string): Promise<UsageApiFetchResult> {
+async function fetchFromUsageApi(token: string, source: UsageSource): Promise<UsageApiFetchResult> {
     return new Promise((resolve) => {
         let settled = false;
 
@@ -660,7 +711,7 @@ async function fetchFromUsageApi(token: string): Promise<UsageApiFetchResult> {
             resolve(value);
         };
 
-        const requestOptions = getUsageApiRequestOptions(token);
+        const requestOptions = getUsageApiRequestOptions(token, source);
         if (!requestOptions) {
             finish({ kind: 'error' });
             return;
@@ -701,9 +752,21 @@ async function fetchFromUsageApi(token: string): Promise<UsageApiFetchResult> {
     });
 }
 
+function parseUsageResponse(source: UsageSource, rawJson: string): UsageData | null {
+    return source === 'opencode' ? parseOpenCodeUsageResponse(rawJson) : parseUsageApiResponse(rawJson);
+}
+
+// A response that carries no window at all is not usable usage data. The
+// monthly window only ever comes from the opencode source, so including it
+// leaves the Claude path's judgement unchanged.
+function hasUsageWindowData(data: UsageData): boolean {
+    return data.sessionUsage !== undefined || data.weeklyUsage !== undefined || data.monthlyUsage !== undefined;
+}
+
 export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promise<UsageData> {
     const now = Math.floor(Date.now() / 1000);
     const requiredFields = options.requiredFields ?? [];
+    const source = getCurrentUsageSource();
 
     // Check memory cache (fast path)
     if (cachedUsageData) {
@@ -720,7 +783,7 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
     // failures are not masked as timeout) and fingerprint it so the file cache
     // can be invalidated on an account switch: a different token, written by a
     // logout/login, no longer matches the cached fingerprint.
-    const token = getUsageToken();
+    const token = getUsageSourceToken(source);
     const currentTokenHash = token ? fingerprintUsageToken(token) : null;
 
     // Check file cache
@@ -731,7 +794,8 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
             const rawCache = fs.readFileSync(CACHE_FILE, 'utf8');
             const fileData = parseCachedUsageData(rawCache);
             if (fileData && !fileData.error
-                && tokenHashMatches(readCachedTokenHash(rawCache), currentTokenHash)
+                && tokenHashMatches(readCachedUsageMeta(rawCache).tokenHash, currentTokenHash)
+                && cachedSourceMatches(rawCache, source)
                 && hasRequiredUsageFields(fileData, requiredFields)) {
                 return cacheUsageData(fileData, now);
             }
@@ -741,7 +805,7 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
     }
 
     if (!token) {
-        return getStaleUsageOrError('no-credentials', now, currentTokenHash, LOCK_MAX_AGE, requiredFields);
+        return getStaleUsageOrError('no-credentials', now, currentTokenHash, LOCK_MAX_AGE, requiredFields, source);
     }
 
     const activeLock = readActiveUsageLock(now);
@@ -751,7 +815,8 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
             now,
             currentTokenHash,
             Math.max(1, activeLock.blockedUntil - now),
-            requiredFields
+            requiredFields,
+            source
         );
     }
 
@@ -759,33 +824,33 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
 
     // Fetch from API using Node's https module
     try {
-        const response = await fetchFromUsageApi(token);
+        const response = await fetchFromUsageApi(token, source);
 
         if (response.kind === 'rate-limited') {
             writeUsageLock(now + response.retryAfterSeconds, 'rate-limited');
-            return getStaleUsageOrError('rate-limited', now, currentTokenHash, response.retryAfterSeconds, requiredFields);
+            return getStaleUsageOrError('rate-limited', now, currentTokenHash, response.retryAfterSeconds, requiredFields, source);
         }
 
         if (response.kind === 'error') {
-            return getStaleUsageOrError('api-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields);
+            return getStaleUsageOrError('api-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields, source);
         }
 
-        const usageData = parseUsageApiResponse(response.body);
+        const usageData = parseUsageResponse(source, response.body);
         if (!usageData) {
             writeUsageLock(now + LOCK_MAX_AGE, 'parse-error');
-            return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields);
+            return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields, source);
         }
 
         // Validate we got actual data
-        if (usageData.sessionUsage === undefined && usageData.weeklyUsage === undefined) {
+        if (!hasUsageWindowData(usageData)) {
             writeUsageLock(now + LOCK_MAX_AGE, 'parse-error');
-            return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields);
+            return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields, source);
         }
 
         // Save to cache
         try {
             ensureCacheDirExists();
-            fs.writeFileSync(CACHE_FILE, JSON.stringify({ ...usageData, tokenHash: currentTokenHash ?? undefined }));
+            fs.writeFileSync(CACHE_FILE, JSON.stringify({ ...usageData, tokenHash: currentTokenHash ?? undefined, source }));
         } catch {
             // Ignore cache write errors
         }
@@ -800,6 +865,6 @@ export async function fetchUsageData(options: FetchUsageDataOptions = {}): Promi
         return cacheUsageData(usageData, now);
     } catch {
         writeUsageLock(now + LOCK_MAX_AGE, 'parse-error');
-        return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields);
+        return getStaleUsageOrError('parse-error', now, currentTokenHash, LOCK_MAX_AGE, requiredFields, source);
     }
 }

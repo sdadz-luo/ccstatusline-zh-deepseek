@@ -3,6 +3,7 @@ import type { BlockMetrics } from '../types';
 import { getCachedBlockMetrics } from './jsonl';
 import {
     FIVE_HOUR_BLOCK_MS,
+    MONTHLY_WINDOW_MS,
     SEVEN_DAY_WINDOW_MS,
     type UsageData,
     type UsageError,
@@ -32,17 +33,25 @@ function buildUsageWindow(resetAtMs: number, nowMs: number, durationMs: number):
     };
 }
 
-export function getUsageWindowFromResetAt(sessionResetAt: string | undefined, nowMs = Date.now()): UsageWindowMetrics | null {
-    if (!sessionResetAt) {
+function getUsageWindowFromResetAtForDuration(
+    resetAt: string | undefined,
+    nowMs: number,
+    durationMs: number
+): UsageWindowMetrics | null {
+    if (!resetAt) {
         return null;
     }
 
-    const resetAtMs = Date.parse(sessionResetAt);
+    const resetAtMs = Date.parse(resetAt);
     if (Number.isNaN(resetAtMs)) {
         return null;
     }
 
-    return buildUsageWindow(resetAtMs, nowMs, FIVE_HOUR_BLOCK_MS);
+    return buildUsageWindow(resetAtMs, nowMs, durationMs);
+}
+
+export function getUsageWindowFromResetAt(sessionResetAt: string | undefined, nowMs = Date.now()): UsageWindowMetrics | null {
+    return getUsageWindowFromResetAtForDuration(sessionResetAt, nowMs, FIVE_HOUR_BLOCK_MS);
 }
 
 export function getUsageWindowFromBlockMetrics(blockMetrics: BlockMetrics, nowMs = Date.now()): UsageWindowMetrics | null {
@@ -73,16 +82,14 @@ export function resolveUsageWindowWithFallback(
 }
 
 export function getWeeklyUsageWindowFromResetAt(weeklyResetAt: string | undefined, nowMs = Date.now()): UsageWindowMetrics | null {
-    if (!weeklyResetAt) {
-        return null;
-    }
+    return getUsageWindowFromResetAtForDuration(weeklyResetAt, nowMs, SEVEN_DAY_WINDOW_MS);
+}
 
-    const resetAtMs = Date.parse(weeklyResetAt);
-    if (Number.isNaN(resetAtMs)) {
-        return null;
-    }
-
-    return buildUsageWindow(resetAtMs, nowMs, SEVEN_DAY_WINDOW_MS);
+// opencode go only: the monthly window's reset instant comes from the API while
+// its length is assumed (see MONTHLY_WINDOW_MS) — the resulting window is only
+// used for the progress-bar time cursor.
+export function resolveMonthlyUsageWindow(usageData: UsageData, nowMs = Date.now()): UsageWindowMetrics | null {
+    return getUsageWindowFromResetAtForDuration(usageData.monthlyResetAt, nowMs, MONTHLY_WINDOW_MS);
 }
 
 export function resolveWeeklyUsageWindow(usageData: UsageData, nowMs = Date.now()): UsageWindowMetrics | null {

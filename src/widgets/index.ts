@@ -63,6 +63,7 @@ export { FreeMemoryWidget } from './FreeMemory';
 export { SessionNameWidget } from './SessionName';
 export { SessionUsageWidget } from './SessionUsage';
 export { WeeklyUsageWidget } from './WeeklyUsage';
+export { MonthlyUsageWidget } from './MonthlyUsage';
 export { ExtraUsageUtilizationWidget } from './ExtraUsageUtilization';
 export { ExtraUsageRemainingWidget } from './ExtraUsageRemaining';
 export { ExtraUsageUsedWidget } from './ExtraUsageUsed';

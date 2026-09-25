@@ -18,6 +18,7 @@ import {
 const BASE_USAGE_WIDGET_TYPES = [
     'session-usage',
     'weekly-usage',
+    'monthly-usage',
     'block-timer',
     'reset-timer',
     'weekly-reset-timer',
@@ -36,6 +37,8 @@ const USAGE_DATA_FIELDS: UsageDataField[] = [
     'sessionResetAt',
     'weeklyUsage',
     'weeklyResetAt',
+    'monthlyUsage',
+    'monthlyResetAt',
     ...WEEKLY_MODEL_USAGE_BUCKETS.flatMap(bucket => [bucket.usageField, bucket.resetField]),
     'extraUsageEnabled',
     'extraUsageLimit',
@@ -55,6 +58,7 @@ const EMPTY_USAGE_REQUIREMENTS: UsageFieldRequirement[] = [];
 const USAGE_WIDGET_REQUIREMENTS: Record<string, UsageFieldRequirement[]> = {
     'session-usage': [{ field: 'sessionUsage' }],
     'weekly-usage': [{ field: 'weeklyUsage' }],
+    'monthly-usage': [{ field: 'monthlyUsage' }],
     ...Object.fromEntries(WEEKLY_MODEL_USAGE_BUCKETS.map(bucket => [bucket.widgetType, [{ field: bucket.usageField }]])),
     'block-timer': [{ field: 'sessionResetAt', suppressFetchError: true }],
     'reset-timer': [{ field: 'sessionResetAt', suppressFetchError: true }],
@@ -77,6 +81,7 @@ const USAGE_WIDGET_REQUIREMENTS: Record<string, UsageFieldRequirement[]> = {
 const USAGE_CURSOR_REQUIREMENTS: Record<string, UsageFieldRequirement> = {
     'session-usage': { field: 'sessionResetAt' },
     'weekly-usage': { field: 'weeklyResetAt' },
+    'monthly-usage': { field: 'monthlyResetAt' },
     ...Object.fromEntries(WEEKLY_MODEL_USAGE_BUCKETS.map(bucket => [bucket.widgetType, { field: bucket.resetField, alternatives: ['weeklyResetAt'] }]))
 };
 

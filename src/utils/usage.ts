@@ -8,6 +8,7 @@ export {
     getWeeklyUsageWindowFromResetAt,
     makeUsageProgressBar,
     resolveFableUsageWindow,
+    resolveMonthlyUsageWindow,
     resolveUsageWindowWithFallback,
     resolveWeeklyOpusUsageWindow,
     resolveWeeklySonnetUsageWindow,
@@ -15,6 +16,7 @@ export {
 } from './usage-windows';
 export {
     FIVE_HOUR_BLOCK_MS,
+    MONTHLY_WINDOW_MS,
     SEVEN_DAY_WINDOW_MS,
     type UsageData,
     type UsageError,

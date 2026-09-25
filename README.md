@@ -34,7 +34,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 
 ccstatusline 是一个优秀的 Claude Code CLI 状态栏格式化工具，支持 80+ 种可定制组件、Powerline 主题、交互式 TUI 配置界面等丰富功能。本项目在其基础上，将所有用户可见的英文文本直接替换为中文，包括：
 
-- **87 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量）
+- **88 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量）
 - **TUI 配置界面**的全部菜单项、帮助文本、提示信息、对话框
 - **布局组件**（分隔符、弹性分隔符）的名称和描述
 - **极简模式 / Minimalist Mode**、**模糊搜索组件选择器**、**Powerline 主题色延续**（v2.2.8）
@@ -68,7 +68,7 @@ ccstatusline 是一个优秀的 Claude Code CLI 状态栏格式化工具，支�
 
 ## 🐋 DeepSeek 适配
 
-面向使用 DeepSeek 模型（含经第三方代理接入）的用户，本 Fork 在上游基础上做了四处适配。四者都只在对应场景生效，Claude 模型下的表现与上游一致。
+面向使用 DeepSeek 模型（含经第三方代理接入）的用户，本 Fork 在上游基础上做了五处适配。五者都只在对应场景生效，Claude 模型下的表现与上游一致。
 
 ### 峰谷分时计价（会话费用组件）
 
@@ -117,11 +117,25 @@ ccstatusline 是一个优秀的 Claude Code CLI 状态栏格式化工具，支�
 
 Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在主 transcript 里，上游的会话费用因此会低估。本 Fork 额外汇总本次会话所有子代理的 token 用量并计入费用。
 
+### opencode 用量数据源（套餐额度组件）
+
+上游的「会话用量 / 周用量 / 重置计时」等组件只认 Claude 的 OAuth 订阅凭据（`~/.claude/.credentials.json` 的 `claudeAiOauth`），再打 `api.anthropic.com/api/oauth/usage`。用第三方中转 key 接入时该凭据不存在，这几个组件会一直显示 `[无凭证]`。
+
+本 Fork 增加了一条数据源：当 `ANTHROPIC_BASE_URL` 指向 `opencode.ai` 时，改打 opencode 自己的用量接口。
+
+- **接口**：`GET https://opencode.ai/zen/go/v1/usage`，`Authorization: Bearer <key>`，返回 `usage.{rolling,weekly,monthly}`，每项含 `status`、`percent`、`resetsAt`。
+- **窗口映射**：`rolling` → 会话用量（5 小时）、`weekly` → 周用量、`monthly` → 月用量（本 Fork 新增的组件）。重置计时组件随之改用接口给出的重置时刻，不再依赖本地 transcript 推算。
+- **`percent` 是「已用」百分比**：opencode 的额度按模型折算成美元、分三个滚动窗口（5 小时 = 月额度 20%、周 = 50%、月 = 100%，见 [opencode go 文档](https://opencode.ai/docs/go/)）。按 opencode 内的记账价目换算本地 transcript 消耗后，滚动与周两个窗口各自反解出的月额度互相吻合（$128.7 与 $125.2）；若按「剩余」解释则解得 $6.77 与 $3.87，自相矛盾。
+- **凭据解析顺序**：`OPENCODE_API_KEY` → `ANTHROPIC_API_KEY`（环境变量，再退 settings.json 的 env 段）→ `~/.local/share/opencode/auth.json` 的 `opencode` 条目。**不取该文件的 `opencode-go` 条目**：实测它对 `/usage` 返回 403，只有同账号的 Zen key 能读。
+- **按源隔离缓存**：缓存文件额外记录数据源，切换 Claude / opencode 时立即失效，不会串用另一侧的数值。
+
+> 已知限制：`percent` 是整数粒度，月额度 1% 约合 $1.26，轻量使用时会长时间停在同一个数字。
+
 ---
 
 ## ✨ 功能特性
 
-- **87 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度等
+- **88 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度等
 - **交互式 TUI 配置** — 按 `ccstatusline-zh setup` 启动可视化配置界面
 - **Powerline 风格** — 内置多款 Powerline 主题，支持自定义分隔符，支持主题色跨行延续
 - **极简模式** — 一键让所有组件切换到"无标签"模式，状态栏更精简
@@ -132,7 +146,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **自定义颜色** — 每个组件支持独立的前景色和背景色设置
 - **自定义命令 & 文本 & 符号** — 可嵌入自定义 Shell 命令输出、静态文本或单字符符号/Emoji
 - **可点击链接** — 支持 OSC8 终端超链接（Git 分支、Git PR、仓库根目录等可配置）
-- **DeepSeek 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度分母修正、子代理用量汇总
+- **DeepSeek 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度分母修正、子代理用量汇总、opencode 套餐用量数据源
 - **跨平台** — 支持 macOS、Linux、Windows
 
 ---
@@ -318,6 +332,7 @@ ccstatusline-zh --config /path/to/custom-settings.json
 | 会话名称       | 显示 Claude Code 会话名称     |
 | 会话用量       | 显示会话 API 用量             |
 | 周用量         | 显示本周 API 用量             |
+| 月用量         | 显示本月 API 用量（opencode 数据源） |
 | 周 Sonnet 用量 | 显示本周 Sonnet 模型 API 用量 |
 | 周 Opus 用量   | 显示本周 Opus 模型 API 用量   |
 | 周 Fable 用量  | 显示本周 Fable 模型 API 用量  |
@@ -432,7 +447,7 @@ bun run lint
 ```
 src/
 ├── ccstatusline.ts          # 入口文件
-├── widgets/                 # 组件目录（87 个组件）
+├── widgets/                 # 组件目录（88 个组件）
 │   ├── Model.ts
 │   ├── GitBranch.ts
 │   ├── TokensInput.ts
