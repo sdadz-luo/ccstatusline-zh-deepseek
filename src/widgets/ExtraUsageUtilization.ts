@@ -18,6 +18,7 @@ import { makeTimerProgressBar } from './shared/progress-bar';
 import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 import {
     cycleUsageDisplayMode,
+    formatUsagePercent,
     getUsageDisplayMode,
     getUsageDisplayModifierText,
     getUsagePercentCustomKeybinds,
@@ -73,16 +74,16 @@ export class ExtraUsageUtilizationWidget implements Widget {
             if (isUsageProgressMode(displayMode)) {
                 const width = getUsageProgressBarWidth(displayMode);
                 const progressBar = makeTimerProgressBar(renderedPercent, width);
-                return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${renderedPercent.toFixed(1)}%`);
+                return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`);
             }
 
             if (isUsageSliderMode(displayMode)) {
                 const slider = makeSliderBar(renderedPercent);
-                const sliderDisplay = displayMode === 'slider' ? `${slider} ${renderedPercent.toFixed(1)}%` : slider;
+                const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
                 return formatRawOrLabeledValue(item, '超额: ', sliderDisplay);
             }
 
-            return formatRawOrLabeledValue(item, '超额: ', `${renderedPercent.toFixed(1)}%`);
+            return formatRawOrLabeledValue(item, '超额: ', `${formatUsagePercent(renderedPercent)}%`);
         }
 
         const data = context.usageData ?? {};
@@ -104,16 +105,16 @@ export class ExtraUsageUtilizationWidget implements Widget {
         if (isUsageProgressMode(displayMode)) {
             const width = getUsageProgressBarWidth(displayMode);
             const progressBar = makeTimerProgressBar(renderedPercent, width);
-            return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${renderedPercent.toFixed(1)}%`);
+            return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`);
         }
 
         if (isUsageSliderMode(displayMode)) {
             const slider = makeSliderBar(renderedPercent);
-            const sliderDisplay = displayMode === 'slider' ? `${slider} ${renderedPercent.toFixed(1)}%` : slider;
+            const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
             return formatRawOrLabeledValue(item, '超额: ', sliderDisplay);
         }
 
-        return formatRawOrLabeledValue(item, '超额: ', `${renderedPercent.toFixed(1)}%`);
+        return formatRawOrLabeledValue(item, '超额: ', `${formatUsagePercent(renderedPercent)}%`);
     }
 
     getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {

@@ -56,7 +56,7 @@ describe('WeeklyUsageWidget', () => {
             id: 'weekly',
             type: 'weekly-usage',
             metadata: { cursor: 'true', display: 'slider' }
-        }, context)).toBe('周用量: ▓▓░░░│░░░░ 20.0%');
+        }, context)).toBe('周用量: ▓▓░░░│░░░░ 20%');
         expect(render(widget, {
             id: 'weekly',
             type: 'weekly-usage',
@@ -70,7 +70,7 @@ describe('WeeklyUsageWidget', () => {
         errorMessageMock: usageErrorMessageMock,
         expectedInvertedTime: '周用量: 57.9%',
         expectedModifierText: '(长进度条, 剩余)',
-        expectedPreviewInvertedTime: '周用量: 88.0%',
+        expectedPreviewInvertedTime: '周用量: 88%',
         expectedProgress: '周用量: [███████████████████░░░░░░░░░░░░░] 57.9%',
         expectedRawInvertedTime: '57.9%',
         expectedRawProgress: '[███████░░░░░░░░░] 42.1%',

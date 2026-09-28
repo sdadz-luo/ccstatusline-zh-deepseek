@@ -38,17 +38,17 @@ describe('ExtraUsageUtilizationWidget', () => {
             }
         };
 
-        expect(render(widget, { id: 'extra', type: 'extra-usage-utilization' }, context)).toBe('超额: 25.0%');
+        expect(render(widget, { id: 'extra', type: 'extra-usage-utilization' }, context)).toBe('超额: 25%');
         expect(render(widget, {
             id: 'extra',
             rawValue: true,
             type: 'extra-usage-utilization'
-        }, context)).toBe('25.0%');
+        }, context)).toBe('25%');
         expect(render(widget, {
             id: 'extra',
             metadata: { display: 'progress-short' },
             type: 'extra-usage-utilization'
-        }, context)).toBe('超额: [████░░░░░░░░░░░░] 25.0%');
+        }, context)).toBe('超额: [████░░░░░░░░░░░░] 25%');
         expect(render(widget, {
             id: 'extra',
             metadata: { display: 'slider-only' },
@@ -164,7 +164,7 @@ describe('ExtraUsageUtilizationWidget', () => {
                 extraUsageEnabled: true,
                 extraUsageUtilization: 25
             }
-        })).toBe('超额: [████████████░░░░] 75.0%');
+        })).toBe('超额: [████████████░░░░] 75%');
     });
 
     it('inverts plain text and preview rendering', () => {
@@ -180,13 +180,13 @@ describe('ExtraUsageUtilizationWidget', () => {
                 extraUsageEnabled: true,
                 extraUsageUtilization: 25
             }
-        })).toBe('超额: 75.0%');
+        })).toBe('超额: 75%');
         expect(render(widget, { ...item, rawValue: true }, {
             usageData: {
                 extraUsageEnabled: true,
                 extraUsageUtilization: 25
             }
-        })).toBe('75.0%');
+        })).toBe('75%');
         expect(render(widget, item, { isPreview: true })).toBe('超额: 97.4%');
     });
 });

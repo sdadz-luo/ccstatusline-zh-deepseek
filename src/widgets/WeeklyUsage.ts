@@ -15,6 +15,7 @@ import { makeTimerProgressBar } from './shared/progress-bar';
 import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 import {
     cycleUsageDisplayMode,
+    formatUsagePercent,
     getUsageDisplayMode,
     getUsageDisplayModifierText,
     getUsagePercentCustomKeybinds,
@@ -69,17 +70,17 @@ export class WeeklyUsageWidget implements Widget {
             if (isUsageProgressMode(displayMode)) {
                 const width = getUsageProgressBarWidth(displayMode);
                 const progressBar = makeTimerProgressBar(renderedPercent, width, showCursor ? { cursorPercent: 50 } : undefined);
-                const progressDisplay = `[${progressBar}] ${renderedPercent.toFixed(1)}%`;
+                const progressDisplay = `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`;
                 return formatRawOrLabeledValue(item, '周用量: ', progressDisplay);
             }
 
             if (isUsageSliderMode(displayMode)) {
                 const slider = makeSliderBar(renderedPercent, undefined, showCursor ? { cursorPercent: 50 } : undefined);
-                const sliderDisplay = displayMode === 'slider' ? `${slider} ${renderedPercent.toFixed(1)}%` : slider;
+                const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
                 return formatRawOrLabeledValue(item, '周用量: ', sliderDisplay);
             }
 
-            return formatRawOrLabeledValue(item, '周用量: ', `${renderedPercent.toFixed(1)}%`);
+            return formatRawOrLabeledValue(item, '周用量: ', `${formatUsagePercent(renderedPercent)}%`);
         }
 
         const data = context.usageData ?? {};
@@ -104,17 +105,17 @@ export class WeeklyUsageWidget implements Widget {
             const width = getUsageProgressBarWidth(displayMode);
 
             const progressBar = makeTimerProgressBar(renderedPercent, width, getCursorOptions());
-            const progressDisplay = `[${progressBar}] ${renderedPercent.toFixed(1)}%`;
+            const progressDisplay = `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`;
             return formatRawOrLabeledValue(item, '周用量: ', progressDisplay);
         }
 
         if (isUsageSliderMode(displayMode)) {
             const slider = makeSliderBar(renderedPercent, undefined, getCursorOptions());
-            const sliderDisplay = displayMode === 'slider' ? `${slider} ${renderedPercent.toFixed(1)}%` : slider;
+            const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
             return formatRawOrLabeledValue(item, '周用量: ', sliderDisplay);
         }
 
-        return formatRawOrLabeledValue(item, '周用量: ', `${renderedPercent.toFixed(1)}%`);
+        return formatRawOrLabeledValue(item, '周用量: ', `${formatUsagePercent(renderedPercent)}%`);
     }
 
     getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {

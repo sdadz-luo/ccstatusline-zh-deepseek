@@ -56,7 +56,7 @@ describe('SessionUsageWidget', () => {
             id: 'session',
             type: 'session-usage',
             metadata: { cursor: 'true', display: 'slider' }
-        }, context)).toBe('会话: ▓▓░░░│░░░░ 20.0%');
+        }, context)).toBe('会话: ▓▓░░░│░░░░ 20%');
         expect(render(widget, {
             id: 'session',
             type: 'session-usage',
@@ -70,7 +70,7 @@ describe('SessionUsageWidget', () => {
         errorMessageMock: usageErrorMessageMock,
         expectedInvertedTime: '会话: 76.5%',
         expectedModifierText: '(中进度条, 剩余)',
-        expectedPreviewInvertedTime: '会话: 80.0%',
+        expectedPreviewInvertedTime: '会话: 80%',
         expectedProgress: '会话: [████████████░░░░] 76.5%',
         expectedRawInvertedTime: '76.5%',
         expectedRawProgress: '[████████░░░░░░░░░░░░░░░░░░░░░░░░] 23.4%',

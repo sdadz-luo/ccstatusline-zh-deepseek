@@ -71,6 +71,15 @@ export function getUsageProgressBarWidth(mode: UsageDisplayMode): number {
     return mode === 'progress' ? 32 : 16;
 }
 
+// opencode 的用量接口在服务端就 Math.floor 到整数（见 README「opencode 用量数据源」），
+// 对这类值再 toFixed(1) 只会补一个恒为 0 的小数位，看着像有 0.1 分辨率其实没有。
+// 整数就不带小数位，真带小数的数据源（Claude 的 utilization）仍保留一位。
+export function formatUsagePercent(percent: number): string {
+    const fixed = percent.toFixed(1);
+    // 先 toFixed 再判断，顺带吸收浮点误差（如 79.999… 归一成 "80.0"）
+    return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed;
+}
+
 export function isUsageInverted(item: WidgetItem): boolean {
     return isMetadataFlagEnabled(item, 'invert');
 }

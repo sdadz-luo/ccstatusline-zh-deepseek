@@ -57,7 +57,7 @@ describe('MonthlyUsageWidget', () => {
             id: 'monthly',
             type: 'monthly-usage',
             metadata: { cursor: 'true', display: 'slider' }
-        }, context)).toBe('月用量: ▓▓░░░│░░░░ 20.0%');
+        }, context)).toBe('月用量: ▓▓░░░│░░░░ 20%');
         expect(render(widget, {
             id: 'monthly',
             type: 'monthly-usage',
@@ -79,7 +79,7 @@ describe('MonthlyUsageWidget', () => {
         errorMessageMock: usageErrorMessageMock,
         expectedInvertedTime: '月用量: 57.9%',
         expectedModifierText: '(长进度条, 剩余)',
-        expectedPreviewInvertedTime: '月用量: 92.0%',
+        expectedPreviewInvertedTime: '月用量: 92%',
         expectedProgress: '月用量: [███████████████████░░░░░░░░░░░░░] 57.9%',
         expectedRawInvertedTime: '57.9%',
         expectedRawProgress: '[███████░░░░░░░░░] 42.1%',

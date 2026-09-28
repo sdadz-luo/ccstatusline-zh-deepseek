@@ -55,7 +55,7 @@ describe('FableWeeklyUsageWidget', () => {
             id: 'fable-weekly',
             type: 'fable-weekly-usage',
             metadata: { cursor: 'true', display: 'slider' }
-        }, context)).toBe('周 Fable: ▓▓░░░│░░░░ 20.0%');
+        }, context)).toBe('周 Fable: ▓▓░░░│░░░░ 20%');
         expect(render(widget, {
             id: 'fable-weekly',
             type: 'fable-weekly-usage',
@@ -74,7 +74,7 @@ describe('FableWeeklyUsageWidget', () => {
         errorMessageMock: usageErrorMessageMock,
         expectedInvertedTime: '周 Fable: 57.9%',
         expectedModifierText: '(长进度条, 剩余)',
-        expectedPreviewInvertedTime: '周 Fable: 96.0%',
+        expectedPreviewInvertedTime: '周 Fable: 96%',
         expectedProgress: '周 Fable: [███████████████████░░░░░░░░░░░░░] 57.9%',
         expectedRawInvertedTime: '57.9%',
         expectedRawProgress: '[███████░░░░░░░░░] 42.1%',
