@@ -131,7 +131,9 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 
 > 已知限制：`percent` 是整数粒度，月额度 1% 约合 $1.26，轻量使用时会长时间停在同一个数字。
 >
-> 与 opencode 控制台（工作区的 Go 页面）对比时，本组件可能低 1 个百分点——**这是 opencode 自身两个入口的取整口径不同，不是取数错误**：接口用 `Math.floor(usage / limit * 100)`（整数向下取整），控制台页面在 `lib/lite-usage.ts` 里用 `Math.round(usage / limit * 1000) / 10`（0.1 精度四舍五入）覆盖了同一个值。真值落在 6.95%~7.00% 时，控制台显示 7% 而接口只能给 6%。接口不返回金额或小数，本 Fork 无法消除这一差异。
+> 与 opencode 控制台（工作区的 Go 页面）对比时，本组件可能低 1 个百分点——**这是 opencode 自身两个入口的取整口径不同，不是取数错误**：接口侧在 `packages/console/core/src/subscription.ts` 的 `analyzeRollingUsage` / `analyzeWeeklyUsage` / `analyzeMonthlyUsage` 里统一用 `Math.floor(usage / limit * 100)` 向下取整，且 `packages/console/app/src/routes/zen/go/v1/usage.ts` 的 `formatUsage()` 只输出 `status`、`percent`、`resetsAt` 三个字段，**金额不进 JSON**；控制台页面则走登录态的 `"use server"` 查询（`packages/console/app/src/routes/workspace/[id]/go/lite-section.tsx`）直读数据库里的微美分金额，在 `lib/lite-usage.ts` 里用 `Math.round(usage / limit * 1000) / 10`（0.1 精度四舍五入）算。真值落在 6.95%~7.00% 时，控制台显示 7% 而接口只能给 6%。小数位在服务端 `Math.floor` 那一刻就已丢失，本 Fork 无法恢复。
+>
+> 基于此，用量百分比组件对整数**不再补 `.0`**——显示 `7%` 而非 `7.0%`，以免暗示并不存在的 0.1 分辨率；换回 Claude 官方源时 `utilization` 是货真价实的小数，仍保留一位。
 
 ---
 
