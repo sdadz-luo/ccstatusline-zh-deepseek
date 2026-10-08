@@ -1,19 +1,22 @@
-# ccstatusline-zh
+# ccstatusline-zh-deepseek
 
-**🎨 Claude Code CLI 高度可定制状态栏格式化工具 — 中文汉化版**
+**🎨 Claude Code CLI 高度可定制状态栏格式化工具 — 中文汉化 + DeepSeek / opencode 适配**
 
 _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标_
 
-> 本项目是 [ccstatusline](https://github.com/sirmalloc/ccstatusline) 的**中文汉化 Fork**，当前同步至上游 v2.2.27 版本（含周 Fable 用量、迁移账号用量 API 兼容、压缩后上下文修正、隐藏组件分隔符修复及配置导入/导出等最新功能）。所有用户可见的界面文本（组件名称、分类、描述、菜单标签、提示信息等）均已翻译为中文，方便中文用户使用。
+> **本仓库 = 中文汉化版 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh) ＋ DeepSeek 模型 / opencode 网关适配。**
+> 血缘：`sirmalloc/ccstatusline`（英文原版）→ `huangguang1999/ccstatusline-zh`（中文汉化，本仓库基于其 **v2.2.29**）→ **本仓库**（叠加 8 处适配）。
+> 界面中文由汉化版完成（组件名称 / 分类 / 描述 / 菜单 / 提示等，89 类组件），本仓库只做适配层：**用 Claude 官方模型时表现与汉化版完全一致**，适配只在 DeepSeek / opencode 场景下生效。改动逐条列在 [本 Fork 的改动](#-本-fork-的改动)。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/huangguang1999/ccstatusline-zh/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sdadz-luo/ccstatusline-zh-deepseek/blob/main/LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/ccstatusline.svg)](https://nodejs.org)
 
-![Demo](https://raw.githubusercontent.com/huangguang1999/ccstatusline-zh/main/screenshots/demo.gif)
+![Demo](https://raw.githubusercontent.com/sdadz-luo/ccstatusline-zh-deepseek/main/screenshots/demo.gif)
 
 ## 📚 目录
 
 - [关于本项目](#-关于本项目)
+- [本 Fork 的改动](#-本-fork-的改动)
 - [DeepSeek 适配](#-deepseek-适配)
 - [功能特性](#-功能特性)
 - [快速开始](#-快速开始)
@@ -30,11 +33,11 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 
 ## 🌏 关于本项目
 
-**ccstatusline-zh** 是 [ccstatusline](https://github.com/sirmalloc/ccstatusline) 的中文汉化版本。
+本仓库是 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh)（中文汉化版）的一个 fork，基线为其 **v2.2.29**。
 
-ccstatusline 是一个优秀的 Claude Code CLI 状态栏格式化工具，支持 80+ 种可定制组件、Powerline 主题、交互式 TUI 配置界面等丰富功能。本项目在其基础上，将所有用户可见的英文文本直接替换为中文，包括：
+[ccstatusline](https://github.com/sirmalloc/ccstatusline) 是一个优秀的 Claude Code CLI 状态栏格式化工具，支持 80+ 种可定制组件、Powerline 主题、交互式 TUI 配置界面等丰富功能。上游汉化版在其基础上，将所有用户可见的英文文本替换为中文，包括：
 
-- **88 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量）
+- **89 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量，以及本 fork 新增的月用量）
 - **TUI 配置界面**的全部菜单项、帮助文本、提示信息、对话框
 - **布局组件**（分隔符、弹性分隔符）的名称和描述
 - **极简模式 / Minimalist Mode**、**模糊搜索组件选择器**、**Powerline 主题色延续**（v2.2.8）
@@ -53,22 +56,52 @@ ccstatusline 是一个优秀的 Claude Code CLI 状态栏格式化工具，支�
 
 内部标识符（如 settings.json 中的 widget type ID `"model"`、`"git-branch"` 等）保持英文不变，确保与上游版本的配置文件完全兼容。
 
-除中文化外，本 Fork 还针对 **DeepSeek** 模型做了适配：会话费用组件按 DeepSeek 官方峰谷价分时计价，并修复了第三方代理环境下 token 虚高的问题、补齐子代理用量。详见 [DeepSeek 适配](#-deepseek-适配)。
+除中文化外，本仓库针对 **DeepSeek 模型 + opencode 网关**做了 8 处适配，逐条列在下一节；其中与费用/用量相关的 5 处原理写在 [DeepSeek 适配](#-deepseek-适配)。
 
 ### 与上游的差异
 
-| 项目       | ccstatusline | ccstatusline-zh           |
-| ---------- | ------------ | ------------------------- |
-| 界面语言   | 英文         | 中文                      |
-| 配置兼容性 | —            | ✅ 共用相同 settings.json |
-| 功能差异   | —            | 上游功能完全一致，另加 DeepSeek 适配 |
-| 同步版本   | 最新         | v2.2.27（+ 周 Fable 用量 / 用量 API 兼容 / 压缩后上下文修正 / 配置导入导出 / 中文化覆盖） |
+| 项目       | ccstatusline（英文原版） | ccstatusline-zh（汉化版） | 本仓库          |
+| ---------- | ------------------------ | ------------------------- | --------------- |
+| 界面语言   | 英文                     | 中文                      | 中文            |
+| 配置兼容性 | —                        | ✅ 共用相同 settings.json | ✅ 同左         |
+| 功能差异   | —                        | 与英文版一致              | 汉化版功能 + 8 处 DeepSeek / opencode 适配 |
+| 同步版本   | 最新                     | v2.2.32                   | 基于 v2.2.29 分叉（汉化版随后发布了 3 个提交，本仓库尚未跟进） |
+
+三条仓库的关系：
+
+```text
+sirmalloc/ccstatusline            英文原版
+      └─ huangguang1999/ccstatusline-zh      中文汉化（本仓库的 fork 来源，remote 名 upstream）
+             └─ sdadz-luo/ccstatusline-zh-deepseek   本仓库（+ DeepSeek / opencode 适配）
+```
+
+---
+
+## 🔧 本 Fork 的改动
+
+相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 7 个提交、8 处改动：
+
+| #  | 改动                                                          | 提交      | 生效条件 |
+| -- | ------------------------------------------------------------- | --------- | -------- |
+| 1  | 会话费用按 DeepSeek 官方峰谷价**分时计价**（价格表可用 `deepseek-pricing.json` 外部覆盖） | `9b36be1` | 模型标识含 `deepseek` + `flash` |
+| 2  | 代理把一次调用拆多条记录时，按 `message.id` **去重 token**，修正输入/输出/缓存虚高 | `9b36be1` | 始终生效（无 `message.id` 时行为不变） |
+| 3  | **子代理用量汇总**进会话费用（`subagents/` 目录的记录不在主 transcript 里） | `9b36be1` | 始终生效 |
+| 4  | 速度统计改用**分块末条时间戳**作区间终点，修正代理环境下速度虚高 | `bce02b3` | 一次调用被拆成多条记录时（单条记录时首=末，无差异） |
+| 5  | 用量组件接入 **opencode go 数据源**，并新增「月用量」组件 | `e55d0fb` | `ANTHROPIC_BASE_URL` 含 `opencode.ai` |
+| 6  | 用量百分比为整数时**不再补 `.0`** 小数位（避免暗示不存在的 0.1 分辨率） | `e9c0760` | 数据源给出整数时 |
+| 7  | 构建脚本去掉 `rm -rf`，**Windows 下可直接 `bun run build`** | `7099b1b` | — |
+| 8  | 组件总数 88 → 89（新增「月用量」的注册、清单与测试） | `e55d0fb` | — |
+
+第 1–5 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
+
+- **第 6 处**：opencode 的用量接口在服务端就 `Math.floor` 到整数（接口只返回 `status` / `percent` / `resetsAt` 三个字段，金额不进 JSON），再 `toFixed(1)` 只会补一个恒为 0 的小数位。Claude 官方源的 `utilization` 是真实小数，仍保留一位。
+- **第 7 处**：原脚本为 `rm -rf dist/* ; bun build ...`，其中的通配符在 Windows 的 cmd/PowerShell 下不展开，构建会失败；去掉后由 `bun build` 直接覆盖产物。
 
 ---
 
 ## 🐋 DeepSeek 适配
 
-面向使用 DeepSeek 模型（含经第三方代理接入）的用户，本 Fork 在上游基础上做了五处适配。五者都只在对应场景生效，Claude 模型下的表现与上游一致。
+面向使用 DeepSeek 模型（含经第三方代理接入）的用户。以下五处都与费用 / 用量口径相关（完整改动表见 [本 Fork 的改动](#-本-fork-的改动)）。五者都只在对应场景生效，Claude 官方模型下的表现与汉化版一致。
 
 ### 峰谷分时计价（会话费用组件）
 
@@ -139,8 +172,8 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 
 ## ✨ 功能特性
 
-- **88 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度等
-- **交互式 TUI 配置** — 按 `ccstatusline-zh setup` 启动可视化配置界面
+- **89 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度等
+- **交互式 TUI 配置** — 运行构建产物的 `setup` 子命令启动可视化配置界面
 - **Powerline 风格** — 内置多款 Powerline 主题，支持自定义分隔符，支持主题色跨行延续
 - **极简模式** — 一键让所有组件切换到"无标签"模式，状态栏更精简
 - **模糊搜索组件** — 添加组件时支持子串 / 首字母 / 模糊匹配，带实时高亮
@@ -150,88 +183,108 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **自定义颜色** — 每个组件支持独立的前景色和背景色设置
 - **自定义命令 & 文本 & 符号** — 可嵌入自定义 Shell 命令输出、静态文本或单字符符号/Emoji
 - **可点击链接** — 支持 OSC8 终端超链接（Git 分支、Git PR、仓库根目录等可配置）
-- **DeepSeek 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度分母修正、子代理用量汇总、opencode 套餐用量数据源
+- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度分母修正、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
 - **跨平台** — 支持 macOS、Linux、Windows
 
 ---
 
 ## 🚀 快速开始
 
-### 安装
+### 先分清两个包
 
-通过 npm 全局安装：
+| 来源                                           | 是什么                      | 含本仓库的适配 |
+| ---------------------------------------------- | --------------------------- | -------------- |
+| npm 上的 `ccstatusline-zh`                     | 上游汉化版（当前 2.2.32）   | ❌ 不含        |
+| 本仓库源码构建出的 `dist/ccstatusline.js`      | 汉化版 + DeepSeek / opencode 适配 | ✅             |
+
+本仓库**未改包名、也未发布到 npm**，`npm install -g ccstatusline-zh` 装到的是上游汉化版（不含任何 DeepSeek / opencode 适配）。要用本仓库的适配，只能从本仓库构建。
+
+### 从本仓库构建安装
 
 ```bash
-npm install -g ccstatusline-zh
+git clone https://github.com/sdadz-luo/ccstatusline-zh-deepseek.git
+cd ccstatusline-zh-deepseek
+
+bun install      # 需要 Bun：ink@6.2.0 的补丁走 Bun 的 patchedDependencies，npm / pnpm 不会打上
+bun run build    # 产出 dist/ccstatusline.js（约 3.3 MB，Node 14+ 可运行）
 ```
 
-或者使用 Bun：
+把产物放到一个固定目录即可，不必装成全局命令：
 
 ```bash
-bun install -g ccstatusline-zh
+# macOS / Linux
+mkdir -p ~/.claude/tools/ccstatusline-zh-deepseek
+cp -r dist package.json README.md LICENSE ~/.claude/tools/ccstatusline-zh-deepseek/
 ```
 
-> 💡 提示：v2.2.14 起 ccstatusline 增加了「固定版本全局安装」选项，TUI 中选择 **固定全局安装** 即可锁定当前版本，避免 `@latest` 跟随上游。详见 TUI 安装流程。
+```powershell
+# Windows（PowerShell）
+$dst = "$env:USERPROFILE\.claude\tools\ccstatusline-zh-deepseek"
+New-Item -ItemType Directory -Force $dst | Out-Null
+Copy-Item dist, package.json, README.md, LICENSE -Recurse -Destination $dst
+```
 
 ### 配置 Claude Code
 
-在 Claude Code 设置中添加状态栏配置。编辑 `~/.claude/settings.json`：
+编辑 `~/.claude/settings.json`（Windows：`%USERPROFILE%\.claude\settings.json`），把 `statusLine.command` 指向构建产物的绝对路径：
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "ccstatusline-zh",
+    "command": "node \"/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js\"",
     "padding": 0,
     "refreshInterval": 10
   }
 }
 ```
 
-如果使用 `npx` 或 `bunx` 运行，可以使用以下命令：
+Windows 下路径写成 `node "C:\\Users\\you\\.claude\\tools\\ccstatusline-zh-deepseek\\dist\\ccstatusline.js"`（或用正斜杠 `C:/Users/you/...`）。
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "npx -y ccstatusline-zh@latest",
-    "padding": 0
-  }
-}
-```
+> ⚠️ **TUI 的「安装到 Claude Code」对本仓库不适用**：它写入的 `npx -y ccstatusline-zh@latest` / `bunx -y ccstatusline-zh@latest` / `ccstatusline-zh` 三者拉的都是 npm 上的上游汉化版。自管理部署请照上面手写 `command`，不要用 TUI 的安装 / 管理安装 / 检查更新菜单。
 
-> `refreshInterval` 仅在 Claude Code ≥ 2.1.97 时生效，TUI 中可设置为 `1-60` 秒，留空则不写入该字段。
->
-> 其他支持的 `command` 取值：
-> - `bunx -y ccstatusline-zh@latest`
-> - `ccstatusline-zh`（用于自管理 / 全局安装）
->
-> 如需固定版本，可在 TUI 安装时选择「固定全局安装」，TUI 会全局安装当前版本并将 `command` 写为 `ccstatusline-zh`。
+> `refreshInterval` 仅在 Claude Code ≥ 2.1.97 时生效，范围为 `1-60` 秒，留空则不写入该字段。
 
 ### 启动配置界面
 
 ```bash
-ccstatusline-zh setup
+node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" setup
 ```
 
-这将打开交互式 TUI 配置界面，你可以：
+在源码目录里也可以直接 `bun run start setup`。界面内可以：
 
 - 添加、删除、重新排列组件
 - 设置颜色和样式
 - 选择 Powerline 主题
 - 实时预览状态栏效果
 
+### 换到另一台电脑：仓库之外还要准备什么
+
+本仓库只有代码。**状态栏显示成什么样，取决于仓库之外的四份本机配置**，换机时要一并搬，否则「装好了但和原来不一样」：
+
+| 位置                                                                     | 作用                          | 不搬会怎样 |
+| ------------------------------------------------------------------------ | ----------------------------- | ---------- |
+| `~/.config/ccstatusline/settings.json`（Windows `%USERPROFILE%\.config\ccstatusline\settings.json`） | 状态栏布局：组件清单、颜色、分隔符、flex 模式 | 首次运行会写入一份默认布局，内容与原来不同（TUI 里可以「导出 / 导入配置」搬运） |
+| 同目录的 `deepseek-pricing.json`（可选）                                  | DeepSeek 价格覆盖表           | 用内置默认价，一般够用 |
+| `~/.claude/settings.json` 的 `env` 段                                     | `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_DEFAULT_*_MODEL` 等 | 用量组件取不到数；模型标识不再含 `deepseek` / `flash` 时适配不生效 |
+| `~/.local/share/opencode/auth.json` 或 `OPENCODE_API_KEY`                 | opencode 用量接口的凭据（走 opencode 网关时需要） | 用量类组件显示「无凭证」 |
+
+三条容易误判成 bug 的边界：
+
+- **峰谷计价**只在模型标识同时含 `deepseek` 与 `flash` 时生效（如 `deepseek-flash[1m]`）；换成别的模型名，会话费用会回落到上游口径（读 Claude Code 传入的 `cost.total_cost_usd`）。
+- **opencode 用量源**只在 `ANTHROPIC_BASE_URL` 含 `opencode.ai` 时启用；没配这个变量时，用量组件会去打 Claude 的 OAuth 用量接口，通常显示「无凭证」。
+- **Windows 下不按宽度排版**：终端宽度探测返回空（上游行为），不截断、弹性分隔符也不展开，详见 [Windows 支持](#-windows-支持)。
+
 ---
 
 ## 🪟 Windows 支持
 
-ccstatusline-zh 完整支持 Windows 系统。安装方式相同：
+完整支持 Windows。安装走[从本仓库构建](#从本仓库构建安装)，Claude Code 的配置路径为 `%USERPROFILE%\.claude\settings.json`。
 
-```bash
-npm install -g ccstatusline-zh
-```
+Windows 上要注意两点（都用本机实测过）：
 
-Windows 下 Claude Code 的配置路径为 `%USERPROFILE%\.claude\settings.json`。
+- **构建**：`bun run build` 可直接跑（第 7 处改动去掉了原脚本里的 `rm -rf`，通配符在 cmd / PowerShell 下不展开会导致构建失败）。
+- **宽度**：终端宽度探测返回空（上游行为），状态栏不按宽度截断、弹性分隔符不展开。实测同一份配置：不设变量时输出 `模型: Opus 4.6 | 费用: $0.01`，加 `CCSTATUSLINE_WIDTH=120` 后中间被填充到 80 列。需要宽度排版就在 `command` 前加 `CCSTATUSLINE_WIDTH=<列数>`。
 
 ---
 
@@ -239,18 +292,18 @@ Windows 下 Claude Code 的配置路径为 `%USERPROFILE%\.claude\settings.json`
 
 ### 基本用法
 
-安装并配置 statusLine 后，ccstatusline-zh 会在每次 Claude Code 更新状态时自动运行。状态数据通过 stdin 以 JSON 格式传入。
+配置好 `statusLine` 后，Claude Code 每次刷新状态都会运行该命令，并把状态数据通过 stdin 以 JSON 格式传入。
 
 ### 手动测试
 
 ```bash
-cat scripts/payload.example.json | ccstatusline-zh
+cat scripts/payload.example.json | node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js"
 ```
 
 ### 自定义配置文件路径
 
 ```bash
-ccstatusline-zh --config /path/to/custom-settings.json
+node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" --config /path/to/custom-settings.json
 ```
 
 ### 命令行参数
@@ -378,7 +431,7 @@ ccstatusline-zh --config /path/to/custom-settings.json
 
 ## 🖥️ 配置界面（TUI）
 
-运行 `ccstatusline-zh setup` 打开交互式配置界面。
+运行 `node "<产物路径>/dist/ccstatusline.js" setup` 打开交互式配置界面（源码目录里用 `bun run start setup`）。
 
 ### 主菜单功能
 
@@ -387,11 +440,11 @@ ccstatusline-zh --config /path/to/custom-settings.json
 - **全局样式覆盖** — 设置全局颜色、样式及默认内边距方向
 - **终端选项** — 配置终端宽度和颜色级别
 - **配置状态行** — 配置 Claude Code 状态行刷新间隔（Claude Code ≥ 2.1.97）
-- **导出配置** — 将当前配置保存为 JSON 文件，用于备份或分享
+- **导出配置** — 将当前配置保存为 JSON 文件，用于备份或分享（换机搬布局用这个）
 - **导入配置** — 从 JSON 文件加载配置并预览替换或合并后的差异
-- **安装到 Claude Code** — 选择自动更新 / 固定全局安装两种方式
-- **管理安装** — 已固定安装时可检查 npm 更新、运行全局更新命令、卸载
-- **检查更新** — 查询 npm 仓库最新版本并对比当前版本
+- **安装到 Claude Code** — 选择自动更新 / 固定全局安装两种方式（⚠️ 本仓库不适用，见[上文说明](#配置-claude-code)）
+- **管理安装** — 已固定安装时可检查 npm 更新、运行全局更新命令、卸载（⚠️ 同上，指向的是 npm 上的汉化版）
+- **检查更新** — 查询 npm 仓库最新版本并对比当前版本（⚠️ 同上）
 
 ### 快捷键
 
@@ -420,15 +473,15 @@ ccstatusline-zh --config /path/to/custom-settings.json
 
 ### 环境要求
 
-- [Bun](https://bun.sh/) >= 1.0
-- Node.js >= 14.0.0
+- [Bun](https://bun.sh/) >= 1.0 —— 安装依赖、构建、测试都走 Bun；`patchedDependencies` 里的 ink@6.2.0 补丁也只有 Bun 会应用
+- Node.js >= 14.0.0 —— 运行构建产物
 
 ### 本地开发
 
 ```bash
 # 克隆仓库
-git clone https://github.com/huangguang1999/ccstatusline-zh.git
-cd ccstatusline-zh
+git clone https://github.com/sdadz-luo/ccstatusline-zh-deepseek.git
+cd ccstatusline-zh-deepseek
 
 # 安装依赖
 bun install
@@ -439,19 +492,50 @@ bun run example
 # 启动 TUI
 bun run start setup
 
-# 构建
+# 构建（产出 dist/ccstatusline.js，并替换版本占位符）
 bun run build
 
-# 代码检查
+# 类型检查 + ESLint（--max-warnings=0）
 bun run lint
+
+# 测试
+bun test
 ```
+
+### 换机可复现性（实测）
+
+在一台机器上全新 `git clone` 后逐条验证过（Windows 11 + Bun 1.3.14 + Node 26.3.0）：
+
+| 步骤                     | 结果                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `bun install`            | ✅ 572 个包，约 1 分钟（含 ink 补丁）                                             |
+| `bun run build`          | ✅ 产出 `dist/ccstatusline.js`（3.31 MB），版本占位符被替换为 package.json 的版本 |
+| `node dist/ccstatusline.js`（管道喂 `scripts/payload.example.json`） | ✅ 正常渲染中文状态栏，无配置时写入一份默认 settings.json |
+| `bun run lint`           | ✅ 通过                                                                           |
+| `bun test`               | ⚠️ 1939 项中 1937 通过、2 项失败                                                  |
+
+关于那 2 项失败：都在**基线提交上同样失败**，且都是 Windows 环境所致，与本仓库的改动无关——一项是符号链接用例（Windows 建符号链接需开发者模式 / 管理员权限），另一项是全量跑时 `execFileSync` 的 stdio 断言被同进程其他用例的调用干扰（单跑该文件即通过）。CI 只在 `ubuntu-latest` 上运行，不受影响。
+
+> 构建产物与构建机器的路径无关：同一份源码在两台不同目录下构建，产物只在内嵌的 `__dirname` 字符串上不同；该字符串仅用于开发模式（版本占位符未被替换时）的兜底，发布产物用不到。
+
+### 本 fork 新增 / 改动的文件
+
+| 文件                              | 说明                                                         |
+| --------------------------------- | ------------------------------------------------------------ |
+| `src/utils/deepseek-pricing.ts`   | 峰谷价格表、`deepseek-pricing.json` 覆盖读取、波峰时段判定   |
+| `src/utils/opencode-usage.ts`     | opencode go 用量接口：凭据解析顺序、响应解析、窗口映射       |
+| `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、子代理汇总、峰谷分桶 |
+| `src/utils/usage-fetch.ts`        | 用量数据源分派（Claude / opencode）与按源隔离的缓存          |
+| `src/widgets/MonthlyUsage.ts`     | 新增「月用量」组件                                           |
+| `src/widgets/shared/usage-display.ts` | `formatUsagePercent()`：整数百分比不补 `.0`              |
+| `src/widgets/SessionCost.ts`      | 会话费用：DeepSeek 模型按峰谷价分时计价                      |
 
 ### 项目结构
 
-```
+```text
 src/
 ├── ccstatusline.ts          # 入口文件
-├── widgets/                 # 组件目录（88 个组件）
+├── widgets/                 # 组件目录（89 个组件）
 │   ├── Model.ts
 │   ├── GitBranch.ts
 │   ├── TokensInput.ts
@@ -469,6 +553,7 @@ src/
 ## 🙏 致谢
 
 - [ccstatusline](https://github.com/sirmalloc/ccstatusline) — 原始项目，由 [sirmalloc](https://github.com/sirmalloc) 开发维护
+- [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh) — 中文汉化版，本仓库直接基于它，界面中文与绝大多数功能均出自该项目
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic 的 CLI 编码助手
 - [Ink](https://github.com/vadimdemedes/ink) — React 终端渲染框架
 
@@ -482,8 +567,8 @@ src/
 
 <div align="center">
 
-**如果这个汉化版对你有帮助，欢迎 ⭐ Star！**
+**如果这个汉化版对你有帮助，欢迎 ⭐ Star 原项目！**
 
-[上游项目](https://github.com/sirmalloc/ccstatusline) · [问题反馈](https://github.com/huangguang1999/ccstatusline-zh/issues)
+[英文原版](https://github.com/sirmalloc/ccstatusline) · [汉化版](https://github.com/huangguang1999/ccstatusline-zh) · [本仓库问题反馈](https://github.com/sdadz-luo/ccstatusline-zh-deepseek/issues)
 
 </div>
