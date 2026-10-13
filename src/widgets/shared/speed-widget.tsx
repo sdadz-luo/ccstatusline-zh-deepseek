@@ -18,7 +18,9 @@ import {
     calculateInputSpeed,
     calculateOutputSpeed,
     calculateTotalSpeed,
-    formatSpeed
+    calculateTtftMs,
+    formatSpeed,
+    formatTtft
 } from '../../utils/speed-metrics';
 import {
     DEFAULT_SPEED_WINDOW_SECONDS,
@@ -32,7 +34,7 @@ import {
 import { makeModifierText } from './editor-display';
 import { formatRawOrLabeledValue } from './raw-or-labeled';
 
-export type SpeedWidgetKind = 'input' | 'output' | 'total';
+export type SpeedWidgetKind = 'input' | 'output' | 'total' | 'ttft';
 
 const WINDOW_EDITOR_ACTION = 'edit-window';
 
@@ -48,23 +50,30 @@ const SPEED_WIDGET_CONFIG: Record<SpeedWidgetKind, SpeedWidgetKindConfig> = {
     input: {
         label: '输入: ',
         displayName: '输入速度',
-        description: '显示会话平均输入 Token 速度（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
-        sessionPreview: '85.2 t/s',
-        windowedPreview: '31.5 t/s'
+        description: '输入处理（prefill）吞吐：完整输入（含缓存命中）÷ 首字延迟总量（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        sessionPreview: '27.5k t/s',
+        windowedPreview: '18.2k t/s'
     },
     output: {
         label: '输出: ',
         displayName: '输出速度',
-        description: '显示会话平均输出 Token 速度（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        description: '纯生成速度：输出 Token ÷ 纯生成时长（已剔除首字延迟与工具等待，tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
         sessionPreview: '42.5 t/s',
         windowedPreview: '26.8 t/s'
     },
     total: {
         label: '合计: ',
         displayName: '总速度',
-        description: '显示会话平均总 Token 速度（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        description: '纯生成口径的总 Token 速度（输入+输出，已剔除首字延迟与工具等待，tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
         sessionPreview: '127.7 t/s',
         windowedPreview: '58.3 t/s'
+    },
+    ttft: {
+        label: 'TTFT: ',
+        displayName: '首字延迟 (TTFT)',
+        description: '平均首字延迟：从发出请求到模型开始输出的时间（含排队与输入处理）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        sessionPreview: '1.6s',
+        windowedPreview: '1.2s'
     }
 };
 
@@ -126,8 +135,10 @@ export function renderSpeedWidgetValue(
         return null;
     }
 
-    const speed = calculateSpeed(kind, metrics);
-    return formatRawOrLabeledValue(item, config.label, formatSpeed(speed));
+    const valueText = kind === 'ttft'
+        ? formatTtft(calculateTtftMs(metrics))
+        : formatSpeed(calculateSpeed(kind, metrics));
+    return formatRawOrLabeledValue(item, config.label, valueText);
 }
 
 export function getSpeedWidgetCustomKeybinds(): CustomKeybind[] {

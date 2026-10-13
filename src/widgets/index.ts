@@ -59,6 +59,7 @@ export { ClaudeAccountEmailWidget } from './ClaudeAccountEmail';
 export { InputSpeedWidget } from './InputSpeed';
 export { OutputSpeedWidget } from './OutputSpeed';
 export { TotalSpeedWidget } from './TotalSpeed';
+export { TtftSpeedWidget } from './TtftSpeed';
 export { FreeMemoryWidget } from './FreeMemory';
 export { SessionNameWidget } from './SessionName';
 export { SessionUsageWidget } from './SessionUsage';

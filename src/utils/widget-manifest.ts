@@ -64,6 +64,7 @@ export const WIDGET_MANIFEST: WidgetManifestEntry[] = [
     { type: 'input-speed', create: () => new widgets.InputSpeedWidget() },
     { type: 'output-speed', create: () => new widgets.OutputSpeedWidget() },
     { type: 'total-speed', create: () => new widgets.TotalSpeedWidget() },
+    { type: 'ttft', create: () => new widgets.TtftSpeedWidget() },
     { type: 'context-length', create: () => new widgets.ContextLengthWidget() },
     { type: 'context-window', create: () => new widgets.ContextWindowWidget() },
     { type: 'context-percentage', create: () => new widgets.ContextPercentageWidget() },

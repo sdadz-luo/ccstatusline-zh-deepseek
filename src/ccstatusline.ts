@@ -116,7 +116,7 @@ async function renderMultipleLines(data: StatusJSON) {
     // Check if session clock is needed
     const hasSessionClock = lines.some(line => line.some(item => item.type === 'session-clock'));
 
-    const speedWidgetTypes = new Set(['output-speed', 'input-speed', 'total-speed']);
+    const speedWidgetTypes = new Set(['output-speed', 'input-speed', 'total-speed', 'ttft']);
     const hasSpeedItems = lines.some(line => line.some(item => speedWidgetTypes.has(item.type)));
     const requestedSpeedWindows = new Set<number>();
     for (const line of lines) {

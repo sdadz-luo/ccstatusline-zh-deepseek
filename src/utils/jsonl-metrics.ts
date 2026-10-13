@@ -41,7 +41,13 @@ interface SpeedInterval {
 interface SpeedRequest {
     inputTokens: number;
     outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
     assistantTimestampMs: number | null;
+    /** Message id 首次出现的时间戳（首块落盘时刻），与 thinkingMs 配合反推 TTFT */
+    firstTimestampMs: number | null;
+    /** 首块为 thinking 块时，CLI 记录的那段思考时长；缺失则 TTFT 不可分解 */
+    thinkingMs: number | null;
     interval: SpeedInterval | null;
 }
 
@@ -369,11 +375,14 @@ function getIntervalsDurationMs(intervals: SpeedInterval[]): number {
 
 function createEmptySpeedMetrics(): SpeedMetrics {
     return {
-        totalDurationMs: 0,
+        generationDurationMs: 0,
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
-        requestCount: 0
+        requestCount: 0,
+        ttftMsSum: 0,
+        ttftSampleCount: 0,
+        ttftInputTokens: 0
     };
 }
 
@@ -435,6 +444,14 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
                         existing.assistantTimestampMs = entryTimestampMs;
                     }
 
+                    // 合并分支只维护区间终点；首块时间戳保持首次出现值（正常时序下不会为空）
+                    if (existing.firstTimestampMs === null) {
+                        existing.firstTimestampMs = entryTimestampMs;
+                        if (existing.thinkingMs === null && typeof data.thinkingDurationMs === 'number') {
+                            existing.thinkingMs = data.thinkingDurationMs;
+                        }
+                    }
+
                     if (existing.interval) {
                         existing.interval.endMs = Math.max(existing.interval.endMs, entryTimestampMs);
                     }
@@ -449,6 +466,8 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
 
             const inputTokens = data.message.usage.input_tokens || 0;
             const outputTokens = data.message.usage.output_tokens || 0;
+            const cacheReadTokens = data.message.usage.cache_read_input_tokens ?? 0;
+            const cacheCreationTokens = data.message.usage.cache_creation_input_tokens ?? 0;
             let interval: SpeedInterval | null = null;
             if (entryTimestampMs !== null && lastUserTimestamp) {
                 const startMs = lastUserTimestamp.getTime();
@@ -460,7 +479,11 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
             requests.push({
                 inputTokens,
                 outputTokens,
+                cacheReadTokens,
+                cacheCreationTokens,
                 assistantTimestampMs: entryTimestampMs,
+                firstTimestampMs: entryTimestampMs,
+                thinkingMs: typeof data.thinkingDurationMs === 'number' ? data.thinkingDurationMs : null,
                 interval
             });
         }
@@ -490,6 +513,29 @@ function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSp
     };
 }
 
+/**
+ * 反推单次请求的首字延迟（TTFT）。
+ *
+ * 分块 transcript 里首块（thinking）落盘时刻 = 首 token 到达时刻 + 该段思考时长，
+ * CLI 在同一行附了 thinkingDurationMs，于是：
+ *   TTFT = 首块落盘时间 - 请求起点(上一条 user/tool_result) - thinkingDurationMs
+ * 结果超出 [0, 区间长度] 视为不可分解（无 thinking 块、字段缺失或计时边界异常），
+ * 返回 null：该请求不扣减分母、也不进入 TTFT 统计。
+ */
+function computeRequestTtftMs(request: SpeedRequest): number | null {
+    if (request.firstTimestampMs === null || request.thinkingMs === null || !request.interval) {
+        return null;
+    }
+
+    const ttftMs = request.firstTimestampMs - request.interval.startMs - request.thinkingMs;
+    const intervalDurationMs = request.interval.endMs - request.interval.startMs;
+    if (ttftMs < 0 || ttftMs > intervalDurationMs) {
+        return null;
+    }
+
+    return ttftMs;
+}
+
 function buildSpeedMetrics(
     collected: CollectedSpeedMetrics,
     windowSeconds?: number
@@ -515,6 +561,9 @@ function buildSpeedMetrics(
 
     let inputTokens = 0;
     let outputTokens = 0;
+    let ttftMsSum = 0;
+    let ttftSampleCount = 0;
+    let ttftInputTokens = 0;
     const intervals: SpeedInterval[] = [];
 
     for (const request of selectedRequests) {
@@ -525,13 +574,29 @@ function buildSpeedMetrics(
             continue;
         }
 
-        if (windowStartMs === null || windowEndMs === null) {
-            intervals.push(request.interval);
-            continue;
+        const ttftMs = computeRequestTtftMs(request);
+        if (ttftMs !== null) {
+            // TTFT 均值只收完整落在窗口内的样本；跨窗口边界的请求扣减分母时仍按裁剪处理
+            const ttftFullyInsideWindow = windowStartMs === null || request.interval.startMs >= windowStartMs;
+            if (ttftFullyInsideWindow) {
+                ttftMsSum += ttftMs;
+                ttftSampleCount += 1;
+                ttftInputTokens += request.inputTokens + request.cacheReadTokens + request.cacheCreationTokens;
+            }
         }
 
-        const clippedStartMs = Math.max(request.interval.startMs, windowStartMs);
-        const clippedEndMs = Math.min(request.interval.endMs, windowEndMs);
+        let clippedStartMs = request.interval.startMs;
+        let clippedEndMs = request.interval.endMs;
+        if (windowStartMs !== null && windowEndMs !== null) {
+            clippedStartMs = Math.max(clippedStartMs, windowStartMs);
+            clippedEndMs = Math.min(clippedEndMs, windowEndMs);
+        }
+
+        // 生成段从「请求起点 + TTFT」起算，即把排队与首字等待从分母里剔除
+        if (ttftMs !== null) {
+            clippedStartMs = Math.max(clippedStartMs, Math.min(request.interval.startMs + ttftMs, clippedEndMs));
+        }
+
         if (clippedEndMs > clippedStartMs) {
             intervals.push({
                 startMs: clippedStartMs,
@@ -541,14 +606,17 @@ function buildSpeedMetrics(
     }
 
     const mergedIntervals = mergeIntervals(intervals);
-    const totalDurationMs = getIntervalsDurationMs(mergedIntervals);
+    const generationDurationMs = getIntervalsDurationMs(mergedIntervals);
 
     return {
-        totalDurationMs,
+        generationDurationMs,
         inputTokens,
         outputTokens,
         totalTokens: inputTokens + outputTokens,
-        requestCount: selectedRequests.length
+        requestCount: selectedRequests.length,
+        ttftMsSum,
+        ttftSampleCount,
+        ttftInputTokens
     };
 }
 
