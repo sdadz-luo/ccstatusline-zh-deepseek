@@ -5,8 +5,8 @@
 _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标_
 
 > **本仓库 = 中文汉化版 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh) ＋ DeepSeek 模型 / opencode 网关适配。**
-> 血缘：`sirmalloc/ccstatusline`（英文原版）→ `huangguang1999/ccstatusline-zh`（中文汉化，本仓库基于其 **v2.2.29**）→ **本仓库**（叠加 8 处适配）。
-> 界面中文由汉化版完成（组件名称 / 分类 / 描述 / 菜单 / 提示等，89 类组件），本仓库只做适配层：**用 Claude 官方模型时表现与汉化版完全一致**，适配只在 DeepSeek / opencode 场景下生效。改动逐条列在 [本 Fork 的改动](#-本-fork-的改动)。
+> 血缘：`sirmalloc/ccstatusline`（英文原版）→ `huangguang1999/ccstatusline-zh`（中文汉化，本仓库基于其 **v2.2.29**）→ **本仓库**（叠加 10 处适配）。
+> 界面中文由汉化版完成（组件名称 / 分类 / 描述 / 菜单 / 提示等，90 类组件），本仓库只做适配层：**用 Claude 官方模型时表现与汉化版完全一致**，适配只在 DeepSeek / opencode 场景下生效。改动逐条列在 [本 Fork 的改动](#-本-fork-的改动)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sdadz-luo/ccstatusline-zh-deepseek/blob/main/LICENSE)
 [![Node.js Version](https://img.shields.io/node/v/ccstatusline.svg)](https://nodejs.org)
@@ -37,7 +37,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 
 [ccstatusline](https://github.com/sirmalloc/ccstatusline) 是一个优秀的 Claude Code CLI 状态栏格式化工具，支持 80+ 种可定制组件、Powerline 主题、交互式 TUI 配置界面等丰富功能。上游汉化版在其基础上，将所有用户可见的英文文本替换为中文，包括：
 
-- **89 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量，以及本 fork 新增的月用量）
+- **90 个组件**的名称、描述、分类标签（含 v2.2.13 新增的 Voice Status / 周 Sonnet 用量 / 周 Opus 用量，v2.2.17 新增的超额用量占比 / 超额用量剩余，v2.2.20 新增的 Remote Control Status，v2.2.22 新增的缓存命中率 / 缓存读取 / 缓存写入 / 超额已用，v2.2.24 新增的缓存计时器 / Git CI 状态 / 沙箱状态，v2.2.26 新增的周 Fable 用量，以及本 fork 新增的月用量、首字延迟）
 - **TUI 配置界面**的全部菜单项、帮助文本、提示信息、对话框
 - **布局组件**（分隔符、弹性分隔符）的名称和描述
 - **极简模式 / Minimalist Mode**、**模糊搜索组件选择器**、**Powerline 主题色延续**（v2.2.8）
@@ -56,7 +56,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 
 内部标识符（如 settings.json 中的 widget type ID `"model"`、`"git-branch"` 等）保持英文不变，确保与上游版本的配置文件完全兼容。
 
-除中文化外，本仓库针对 **DeepSeek 模型 + opencode 网关**做了 8 处适配，逐条列在下一节；其中与费用/用量相关的 5 处原理写在 [DeepSeek 适配](#-deepseek-适配)。
+除中文化外，本仓库针对 **DeepSeek 模型 + opencode 网关**做了 10 处适配，逐条列在下一节；其中与费用 / 用量 / 速度相关的 6 处原理写在 [DeepSeek 适配](#-deepseek-适配)。
 
 ### 与上游的差异
 
@@ -64,7 +64,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 | ---------- | ------------------------ | ------------------------- | --------------- |
 | 界面语言   | 英文                     | 中文                      | 中文            |
 | 配置兼容性 | —                        | ✅ 共用相同 settings.json | ✅ 同左         |
-| 功能差异   | —                        | 与英文版一致              | 汉化版功能 + 8 处 DeepSeek / opencode 适配 |
+| 功能差异   | —                        | 与英文版一致              | 汉化版功能 + 10 处 DeepSeek / opencode 适配 |
 | 同步版本   | 最新                     | v2.2.32                   | 基于 v2.2.29 分叉（汉化版随后发布了 3 个提交，本仓库尚未跟进） |
 
 三条仓库的关系：
@@ -79,7 +79,7 @@ sirmalloc/ccstatusline            英文原版
 
 ## 🔧 本 Fork 的改动
 
-相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 7 个提交、8 处改动：
+相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 10 个提交、10 处改动：
 
 | #  | 改动                                                          | 提交      | 生效条件 |
 | -- | ------------------------------------------------------------- | --------- | -------- |
@@ -91,8 +91,10 @@ sirmalloc/ccstatusline            英文原版
 | 6  | 用量百分比为整数时**不再补 `.0`** 小数位（避免暗示不存在的 0.1 分辨率） | `e9c0760` | 数据源给出整数时 |
 | 7  | 构建脚本去掉 `rm -rf`，**Windows 下可直接 `bun run build`** | `7099b1b` | — |
 | 8  | 组件总数 88 → 89（新增「月用量」的注册、清单与测试） | `e55d0fb` | — |
+| 9  | 速度类组件的分母改为**剔除首字延迟的纯生成时长**（TTFT 由首块时间戳与 `thinkingDurationMs` 反推）；输入速度改为 **prefill 吞吐**（完整输入 ÷ TTFT） | `c288561` | 响应带 `thinkingDurationMs` 时（无则该项退回端到端口径） |
+| 10 | 新增「**首字延迟 (TTFT)**」组件（组件总数 89 → 90） | `c288561` | 同上 |
 
-第 1–5 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
+第 1–5 处与第 9 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
 
 - **第 6 处**：opencode 的用量接口在服务端就 `Math.floor` 到整数（接口只返回 `status` / `percent` / `resetsAt` 三个字段，金额不进 JSON），再 `toFixed(1)` 只会补一个恒为 0 的小数位。Claude 官方源的 `utilization` 是真实小数，仍保留一位。
 - **第 7 处**：原脚本为 `rm -rf dist/* ; bun build ...`，其中的通配符在 Windows 的 cmd/PowerShell 下不展开，构建会失败；去掉后由 `bun build` 直接覆盖产物。
@@ -101,7 +103,7 @@ sirmalloc/ccstatusline            英文原版
 
 ## 🐋 DeepSeek 适配
 
-面向使用 DeepSeek 模型（含经第三方代理接入）的用户。以下五处都与费用 / 用量口径相关（完整改动表见 [本 Fork 的改动](#-本-fork-的改动)）。五者都只在对应场景生效，Claude 官方模型下的表现与汉化版一致。
+面向使用 DeepSeek 模型（含经第三方代理接入）的用户。以下各节都与费用 / 用量 / 速度口径相关（完整改动表见 [本 Fork 的改动](#-本-fork-的改动)）。各节都只在对应场景生效，Claude 官方模型下的表现与汉化版一致。
 
 ### 峰谷分时计价（会话费用组件）
 
@@ -138,13 +140,17 @@ sirmalloc/ccstatusline            英文原版
 
 部分第三方代理会把同一次 API 调用拆成 thinking / text / tool_use 等多条分块记录写入 transcript，且每条都携带完整的 usage。上游逐条累加，会让输入、输出、缓存 token 虚高数倍。本 Fork 改为按 `message.id` 去重后再累加；速度类组件（输入 / 输出 / 总速度）也按 `message.id` 把一次调用只计作一个请求。
 
-### 速度统计的分母修正
+### 速度口径修正（末块终点 + 剔除首字延迟）
 
 速度组件的分母是「上一条 user / tool_result 记录 → 该次调用某条分块记录」的区间并按并集合并。上游取该消息**首块**的时间戳，但代理的分块记录是在各内容块（thinking / text / tool_use）完成时逐条落盘的，首块远早于响应结束，末块之后才是真正的生成终点——末尾常是大段 tool_use 的 JSON。沿用首块时间戳会把这段生成时间漏出分母，使速度虚高。
 
 本 Fork 改为取该消息**末块**时间戳作区间终点。同一 transcript 实测：会话平均输出速度由 172.0 t/s 修正为 145.2 t/s（约 −16%），单回合最大偏差 2.5 倍（大段 tool_use 的回合）。
 
-> 口径说明：分母含请求在途、代理排队与首 token 延迟，所以该数值是**端到端吞吐**，略低于模型本身的生成速率。
+分母的**起点**另有一处系统性偏差：区间从「上一条 user / tool_result 记录」起算，把请求在途、代理排队与首 token 延迟（TTFT，本机实测 1.2–3.0 s）都摊了进去。响应越短占比越大——一条 196 token 的小响应实测总时长 3.0 s 中 1.3 s 是首字等待，端到端口径显示 65.0 t/s，剔除后为 112.7 t/s。
+
+本 Fork 从 transcript 反推每次请求的 TTFT：首块（thinking）记录附带 CLI 计算的该段思考时长 `thinkingDurationMs`，于是 `TTFT = 首块落盘时间 − 请求起点 − thinkingDurationMs`，分母改用「请求起点 + TTFT → 响应结束」的**纯生成时长**。同时把「输入速度」的含义修正为**输入处理（prefill）吞吐** = 完整输入（含缓存命中/写入）÷ TTFT 总量——原口径（未缓存输入 ÷ 端到端时长）不对应任何物理过程。新增「**首字延迟 (TTFT)**」组件直接显示窗口内的 TTFT 均值。
+
+> 口径说明：速度分母为纯生成时长（已剔除首字延迟与工具等待），更接近模型自身的生成速率；仍含最后一段流式回传的网络耗时。无 thinking 块、无法反推 TTFT 的响应自动退回端到端口径（不扣减分母），TTFT 组件对这类响应显示 `—`。TTFT 本身含服务端排队时间，故 prefill 吞吐是其**下界**。
 
 ### 子代理用量汇总
 
@@ -172,7 +178,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 
 ## ✨ 功能特性
 
-- **89 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度等
+- **90 种可定制组件** — 模型、Git（含 PR / CI / 冲突 / 暂存 / Origin / Upstream / 工作树等细分组件）、Token、上下文、会话、费用、速度（含首字延迟）等
 - **交互式 TUI 配置** — 运行构建产物的 `setup` 子命令启动可视化配置界面
 - **Powerline 风格** — 内置多款 Powerline 主题，支持自定义分隔符，支持主题色跨行延续
 - **极简模式** — 一键让所有组件切换到"无标签"模式，状态栏更精简
@@ -183,7 +189,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **自定义颜色** — 每个组件支持独立的前景色和背景色设置
 - **自定义命令 & 文本 & 符号** — 可嵌入自定义 Shell 命令输出、静态文本或单字符符号/Emoji
 - **可点击链接** — 支持 OSC8 终端超链接（Git 分支、Git PR、仓库根目录等可配置）
-- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度分母修正、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
+- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度口径修正（剔除首字延迟、输入速度改为 prefill 吞吐、新增首字延迟组件）、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
 - **跨平台** — 支持 macOS、Linux、Windows
 
 ---
@@ -365,11 +371,12 @@ node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" --c
 
 ### Token 速度
 
-| 组件     | 说明                        |
-| -------- | --------------------------- |
-| 输入速度 | 显示输入 Token 速度 (tok/s) |
-| 输出速度 | 显示输出 Token 速度 (tok/s) |
-| 总速度   | 显示总 Token 速度 (tok/s)   |
+| 组件     | 说明                                       |
+| -------- | ------------------------------------------ |
+| 输入速度 | 显示输入处理吞吐（prefill，tok/s）         |
+| 输出速度 | 显示纯生成速度（剔除首字延迟，tok/s）      |
+| 总速度   | 显示纯生成口径的总速度 (tok/s)             |
+| 首字延迟 | 显示平均首字延迟 TTFT                      |
 
 ### 上下文
 
@@ -512,7 +519,7 @@ bun test
 | `bun run build`          | ✅ 产出 `dist/ccstatusline.js`（3.31 MB），版本占位符被替换为 package.json 的版本 |
 | `node dist/ccstatusline.js`（管道喂 `scripts/payload.example.json`） | ✅ 正常渲染中文状态栏，无配置时写入一份默认 settings.json |
 | `bun run lint`           | ✅ 通过                                                                           |
-| `bun test`               | ⚠️ 1939 项中 1937 通过、2 项失败                                                  |
+| `bun test`               | ⚠️ 1951 项中 1949 通过、2 项失败                                                  |
 
 关于那 2 项失败：都在**基线提交上同样失败**，且都是 Windows 环境所致，与本仓库的改动无关——一项是符号链接用例（Windows 建符号链接需开发者模式 / 管理员权限），另一项是全量跑时 `execFileSync` 的 stdio 断言被同进程其他用例的调用干扰（单跑该文件即通过）。CI 只在 `ubuntu-latest` 上运行，不受影响。
 
@@ -524,9 +531,11 @@ bun test
 | --------------------------------- | ------------------------------------------------------------ |
 | `src/utils/deepseek-pricing.ts`   | 峰谷价格表、`deepseek-pricing.json` 覆盖读取、波峰时段判定   |
 | `src/utils/opencode-usage.ts`     | opencode go 用量接口：凭据解析顺序、响应解析、窗口映射       |
-| `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、子代理汇总、峰谷分桶 |
+| `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、TTFT 反推与纯生成时长、子代理汇总、峰谷分桶 |
+| `src/utils/speed-metrics.ts`      | 速度口径：纯生成时长分母、prefill 吞吐、TTFT 均值与格式化    |
 | `src/utils/usage-fetch.ts`        | 用量数据源分派（Claude / opencode）与按源隔离的缓存          |
 | `src/widgets/MonthlyUsage.ts`     | 新增「月用量」组件                                           |
+| `src/widgets/TtftSpeed.ts`        | 新增「首字延迟 (TTFT)」组件                                  |
 | `src/widgets/shared/usage-display.ts` | `formatUsagePercent()`：整数百分比不补 `.0`              |
 | `src/widgets/SessionCost.ts`      | 会话费用：DeepSeek 模型按峰谷价分时计价                      |
 
@@ -535,7 +544,7 @@ bun test
 ```text
 src/
 ├── ccstatusline.ts          # 入口文件
-├── widgets/                 # 组件目录（89 个组件）
+├── widgets/                 # 组件目录（90 个组件）
 │   ├── Model.ts
 │   ├── GitBranch.ts
 │   ├── TokensInput.ts
