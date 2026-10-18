@@ -74,11 +74,13 @@ function readAuthFileToken(): string | null {
     }
 }
 
-// 顺序按实测可用性排：前三处返回同一账号的同一份数据，`opencode-go` 那条 403。
-// settings.json 里存的 key 正是 Claude Code 用来调这个网关的那把，故作为兜底。
+// 状态栏由 Claude Code 派生，ANTHROPIC_API_KEY 就是 Claude Code 当前调网关用的
+// 那把，必然可用，故排第一；OPENCODE_API_KEY 可能是 OpenCode CLI 留下的旧 key
+// （实测有一把被服务端判为 api_key_expired），只在没有 ANTHROPIC_API_KEY 时才用。
+// settings.json 里存的 key 同样是 Claude Code 用的那把，作为 env 缺失时的兜底。
 export function getOpenCodeUsageToken(): string | null {
-    return nonEmptyString(process.env.OPENCODE_API_KEY)
-        ?? nonEmptyString(process.env.ANTHROPIC_API_KEY)
+    return nonEmptyString(process.env.ANTHROPIC_API_KEY)
+        ?? nonEmptyString(process.env.OPENCODE_API_KEY)
         ?? nonEmptyString(readSettingsEnv().ANTHROPIC_API_KEY)
         ?? readAuthFileToken();
 }

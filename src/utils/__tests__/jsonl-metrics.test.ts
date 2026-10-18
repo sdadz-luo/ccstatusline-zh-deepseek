@@ -46,6 +46,8 @@ function makeTranscriptLine(params: {
     type: 'user' | 'assistant';
     input?: number;
     output?: number;
+    cacheRead?: number;
+    cacheCreate?: number;
     id?: string;
     isSidechain?: boolean;
     isApiErrorMessage?: boolean;
@@ -62,7 +64,9 @@ function makeTranscriptLine(params: {
                 id: params.id,
                 usage: {
                     input_tokens: params.input ?? 0,
-                    output_tokens: params.output ?? 0
+                    output_tokens: params.output ?? 0,
+                    cache_read_input_tokens: params.cacheRead,
+                    cache_creation_input_tokens: params.cacheCreate
                 }
             }
             : undefined
@@ -722,7 +726,8 @@ describe('jsonl transcript metrics', () => {
         const transcriptPath = path.join(root, 'speed-ttft.jsonl');
 
         // 首块（thinking）10:00:08 落盘、该段思考 6000ms → TTFT = 8000 - 0 - 6000 = 2000ms；
-        // 纯生成时长 = 10s - 2s = 8s（分母已剔除首字等待）
+        // 纯生成时长 = 10s - 2s = 8s（分母已剔除首字等待）。
+        // prefill 只计未缓存输入 + 缓存写入（100 + 200），缓存命中的 5000 不计入。
         fs.writeFileSync(transcriptPath, [
             makeTranscriptLine({
                 timestamp: '2026-01-01T10:00:00.000Z',
@@ -734,6 +739,8 @@ describe('jsonl transcript metrics', () => {
                 type: 'assistant',
                 input: 100,
                 output: 800,
+                cacheRead: 5000,
+                cacheCreate: 200,
                 thinkingDurationMs: 6000
             }),
             makeTranscriptLine({
@@ -741,7 +748,9 @@ describe('jsonl transcript metrics', () => {
                 timestamp: '2026-01-01T10:00:10.000Z',
                 type: 'assistant',
                 input: 100,
-                output: 800
+                output: 800,
+                cacheRead: 5000,
+                cacheCreate: 200
             })
         ].join('\n'));
 
@@ -751,7 +760,7 @@ describe('jsonl transcript metrics', () => {
             generationDurationMs: 8000,
             ttftMsSum: 2000,
             ttftSampleCount: 1,
-            ttftInputTokens: 100,
+            ttftInputTokens: 300,
             inputTokens: 100,
             outputTokens: 800,
             totalTokens: 900,

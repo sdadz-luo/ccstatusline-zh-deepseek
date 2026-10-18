@@ -44,7 +44,7 @@ describe('speed metrics calculations', () => {
         expect(result).toBeNull();
     });
 
-    it('calculateInputSpeed computes prefill throughput from full input over TTFT total', () => {
+    it('calculateInputSpeed computes prefill throughput from uncached input over TTFT total', () => {
         const result = calculateInputSpeed(createMetrics({ ttftInputTokens: 120000, ttftMsSum: 2000, ttftSampleCount: 1 }));
         expect(result).toBe(60000);
     });

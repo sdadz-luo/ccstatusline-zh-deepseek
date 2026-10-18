@@ -21,7 +21,10 @@ export function calculateOutputSpeed(metrics: SpeedMetrics): number | null {
  * Calculates input processing (prefill) throughput from speed metrics.
  *
  * 输入处理耗时约等于 TTFT（首 token 到达前服务端要过完整段输入），因此
- * 吞吐 = 完整输入（含缓存命中/写入）÷ TTFT 总量；只统计有 TTFT 样本的请求。
+ * 吞吐 = 真实 prefill 计算量 ÷ TTFT 总量；只统计有 TTFT 样本的请求。
+ * 分子只含未缓存输入与缓存写入（cache creation），不含缓存命中（cache read）：
+ * 后者直接读 KV cache、不经过前向计算，计入会把读数抬高一个数量级。
+ * TTFT 仍含服务端排队与网络往返，故该值是真实 prefill 速度的下界。
  *
  * @param metrics SpeedMetrics containing timing and token data
  * @returns Input tokens per second, or null if no TTFT samples exist

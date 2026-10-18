@@ -50,7 +50,7 @@ const SPEED_WIDGET_CONFIG: Record<SpeedWidgetKind, SpeedWidgetKindConfig> = {
     input: {
         label: '输入: ',
         displayName: '输入速度',
-        description: '输入处理（prefill）吞吐：完整输入（含缓存命中）÷ 首字延迟总量（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        description: '真实 prefill 吞吐：未缓存输入 + 缓存写入（不含缓存命中）÷ 首字延迟总量（tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
         sessionPreview: '27.5k t/s',
         windowedPreview: '18.2k t/s'
     },

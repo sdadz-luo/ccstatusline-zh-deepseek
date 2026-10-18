@@ -79,7 +79,7 @@ sirmalloc/ccstatusline            英文原版
 
 ## 🔧 本 Fork 的改动
 
-相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 10 个提交、10 处改动：
+相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 12 个提交、10 处改动：
 
 | #  | 改动                                                          | 提交      | 生效条件 |
 | -- | ------------------------------------------------------------- | --------- | -------- |
@@ -91,7 +91,7 @@ sirmalloc/ccstatusline            英文原版
 | 6  | 用量百分比为整数时**不再补 `.0`** 小数位（避免暗示不存在的 0.1 分辨率） | `e9c0760` | 数据源给出整数时 |
 | 7  | 构建脚本去掉 `rm -rf`，**Windows 下可直接 `bun run build`** | `7099b1b` | — |
 | 8  | 组件总数 88 → 89（新增「月用量」的注册、清单与测试） | `e55d0fb` | — |
-| 9  | 速度类组件的分母改为**剔除首字延迟的纯生成时长**（TTFT 由首块时间戳与 `thinkingDurationMs` 反推）；输入速度改为 **prefill 吞吐**（完整输入 ÷ TTFT） | `c288561` | 响应带 `thinkingDurationMs` 时（无则该项退回端到端口径） |
+| 9  | 速度类组件的分母改为**剔除首字延迟的纯生成时长**（TTFT 由首块时间戳与 `thinkingDurationMs` 反推）；输入速度改为 **真实 prefill 吞吐**（未缓存输入 + 缓存写入 ÷ TTFT，不含缓存命中） | `c288561` | 响应带 `thinkingDurationMs` 时（无则该项退回端到端口径） |
 | 10 | 新增「**首字延迟 (TTFT)**」组件（组件总数 89 → 90） | `c288561` | 同上 |
 
 第 1–5 处与第 9 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
@@ -148,9 +148,9 @@ sirmalloc/ccstatusline            英文原版
 
 分母的**起点**另有一处系统性偏差：区间从「上一条 user / tool_result 记录」起算，把请求在途、代理排队与首 token 延迟（TTFT，本机实测 1.2–3.0 s）都摊了进去。响应越短占比越大——一条 196 token 的小响应实测总时长 3.0 s 中 1.3 s 是首字等待，端到端口径显示 65.0 t/s，剔除后为 112.7 t/s。
 
-本 Fork 从 transcript 反推每次请求的 TTFT：首块（thinking）记录附带 CLI 计算的该段思考时长 `thinkingDurationMs`，于是 `TTFT = 首块落盘时间 − 请求起点 − thinkingDurationMs`，分母改用「请求起点 + TTFT → 响应结束」的**纯生成时长**。同时把「输入速度」的含义修正为**输入处理（prefill）吞吐** = 完整输入（含缓存命中/写入）÷ TTFT 总量——原口径（未缓存输入 ÷ 端到端时长）不对应任何物理过程。新增「**首字延迟 (TTFT)**」组件直接显示窗口内的 TTFT 均值。
+本 Fork 从 transcript 反推每次请求的 TTFT：首块（thinking）记录附带 CLI 计算的该段思考时长 `thinkingDurationMs`，于是 `TTFT = 首块落盘时间 − 请求起点 − thinkingDurationMs`，分母改用「请求起点 + TTFT → 响应结束」的**纯生成时长**。同时把「输入速度」的含义修正为**真实 prefill 吞吐** = （未缓存输入 + 缓存写入）÷ TTFT 总量——缓存命中直接读 KV cache、不经过前向计算，计入会把读数抬高一个数量级；原口径（未缓存输入 ÷ 端到端时长）则不对应任何物理过程。新增「**首字延迟 (TTFT)**」组件直接显示窗口内的 TTFT 均值。
 
-> 口径说明：速度分母为纯生成时长（已剔除首字延迟与工具等待），更接近模型自身的生成速率；仍含最后一段流式回传的网络耗时。无 thinking 块、无法反推 TTFT 的响应自动退回端到端口径（不扣减分母），TTFT 组件对这类响应显示 `—`。TTFT 本身含服务端排队时间，故 prefill 吞吐是其**下界**。
+> 口径说明：速度分母为纯生成时长（已剔除首字延迟与工具等待），更接近模型自身的生成速率；仍含最后一段流式回传的网络耗时。输入速度的分子只含实际参与前向计算的 token（未缓存输入 + 缓存写入），不含缓存命中。无 thinking 块、无法反推 TTFT 的响应自动退回端到端口径（不扣减分母），TTFT 组件对这类响应显示 `—`。TTFT 本身含服务端排队时间，故 prefill 吞吐是其**下界**。
 
 ### 子代理用量汇总
 
@@ -165,7 +165,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **接口**：`GET https://opencode.ai/zen/go/v1/usage`，`Authorization: Bearer <key>`，返回 `usage.{rolling,weekly,monthly}`，每项含 `status`、`percent`、`resetsAt`。
 - **窗口映射**：`rolling` → 会话用量（5 小时）、`weekly` → 周用量、`monthly` → 月用量（本 Fork 新增的组件）。重置计时组件随之改用接口给出的重置时刻，不再依赖本地 transcript 推算。
 - **`percent` 是「已用」百分比**：opencode 的额度按模型折算成美元、分三个滚动窗口（5 小时 = 月额度 20%、周 = 50%、月 = 100%，见 [opencode go 文档](https://opencode.ai/docs/go/)）。按 opencode 内的记账价目换算本地 transcript 消耗后，滚动与周两个窗口各自反解出的月额度互相吻合（$128.7 与 $125.2）；若按「剩余」解释则解得 $6.77 与 $3.87，自相矛盾。
-- **凭据解析顺序**：`OPENCODE_API_KEY` → `ANTHROPIC_API_KEY`（环境变量，再退 settings.json 的 env 段）→ `~/.local/share/opencode/auth.json` 的 `opencode` 条目。**不取该文件的 `opencode-go` 条目**：实测它对 `/usage` 返回 403，只有同账号的 Zen key 能读。
+- **凭据解析顺序**：`ANTHROPIC_API_KEY`（Claude Code 当前调网关用的 key）→ `OPENCODE_API_KEY` → settings.json 的 env 段 → `~/.local/share/opencode/auth.json` 的 `opencode` 条目。状态栏由 Claude Code 派生，`ANTHROPIC_API_KEY` 必然可用，故排在最前；`OPENCODE_API_KEY` 可能是别处留下的旧 key（实测有一把被服务端判为 `api_key_expired`），只在缺少前者时才用。auth.json 的 `opencode-go` 条目不直接读取——Claude Code 环境变量里的 key 通常就来自它。
 - **按源隔离缓存**：缓存文件额外记录数据源，切换 Claude / opencode 时立即失效，不会串用另一侧的数值。
 
 > 已知限制：`percent` 是整数粒度，月额度 1% 约合 $1.26，轻量使用时会长时间停在同一个数字。
@@ -189,7 +189,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **自定义颜色** — 每个组件支持独立的前景色和背景色设置
 - **自定义命令 & 文本 & 符号** — 可嵌入自定义 Shell 命令输出、静态文本或单字符符号/Emoji
 - **可点击链接** — 支持 OSC8 终端超链接（Git 分支、Git PR、仓库根目录等可配置）
-- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度口径修正（剔除首字延迟、输入速度改为 prefill 吞吐、新增首字延迟组件）、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
+- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度口径修正（剔除首字延迟、输入速度改为真实 prefill 吞吐（不含缓存命中）、新增首字延迟组件）、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
 - **跨平台** — 支持 macOS、Linux、Windows
 
 ---
@@ -273,7 +273,7 @@ node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" set
 | `~/.config/ccstatusline/settings.json`（Windows `%USERPROFILE%\.config\ccstatusline\settings.json`） | 状态栏布局：组件清单、颜色、分隔符、flex 模式 | 首次运行会写入一份默认布局，内容与原来不同（TUI 里可以「导出 / 导入配置」搬运） |
 | 同目录的 `deepseek-pricing.json`（可选）                                  | DeepSeek 价格覆盖表           | 用内置默认价，一般够用 |
 | `~/.claude/settings.json` 的 `env` 段                                     | `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_DEFAULT_*_MODEL` 等 | 用量组件取不到数；模型标识不再含 `deepseek` / `flash` 时适配不生效 |
-| `~/.local/share/opencode/auth.json` 或 `OPENCODE_API_KEY`                 | opencode 用量接口的凭据（走 opencode 网关时需要） | 用量类组件显示「无凭证」 |
+| 环境变量 `ANTHROPIC_API_KEY`（或 `OPENCODE_API_KEY`）、`~/.local/share/opencode/auth.json` | opencode 用量接口的凭据（走 opencode 网关时需要） | 用量类组件显示「无凭证」 |
 
 三条容易误判成 bug 的边界：
 
@@ -373,7 +373,7 @@ node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" --c
 
 | 组件     | 说明                                       |
 | -------- | ------------------------------------------ |
-| 输入速度 | 显示输入处理吞吐（prefill，tok/s）         |
+| 输入速度 | 显示真实 prefill 吞吐（未缓存输入，tok/s） |
 | 输出速度 | 显示纯生成速度（剔除首字延迟，tok/s）      |
 | 总速度   | 显示纯生成口径的总速度 (tok/s)             |
 | 首字延迟 | 显示平均首字延迟 TTFT                      |
@@ -530,7 +530,7 @@ bun test
 | 文件                              | 说明                                                         |
 | --------------------------------- | ------------------------------------------------------------ |
 | `src/utils/deepseek-pricing.ts`   | 峰谷价格表、`deepseek-pricing.json` 覆盖读取、波峰时段判定   |
-| `src/utils/opencode-usage.ts`     | opencode go 用量接口：凭据解析顺序、响应解析、窗口映射       |
+| `src/utils/opencode-usage.ts`     | opencode go 用量接口：凭据解析（优先 Claude Code 当前 key）、响应解析、窗口映射 |
 | `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、TTFT 反推与纯生成时长、子代理汇总、峰谷分桶 |
 | `src/utils/speed-metrics.ts`      | 速度口径：纯生成时长分母、prefill 吞吐、TTFT 均值与格式化    |
 | `src/utils/usage-fetch.ts`        | 用量数据源分派（Claude / opencode）与按源隔离的缓存          |

@@ -581,7 +581,9 @@ function buildSpeedMetrics(
             if (ttftFullyInsideWindow) {
                 ttftMsSum += ttftMs;
                 ttftSampleCount += 1;
-                ttftInputTokens += request.inputTokens + request.cacheReadTokens + request.cacheCreationTokens;
+                // prefill 只计算未命中缓存的 token：cache read 直接从 KV cache 取，
+                // 不经过前向计算；cache creation 与未缓存输入一样要过一遍 prefill。
+                ttftInputTokens += request.inputTokens + request.cacheCreationTokens;
             }
         }
 

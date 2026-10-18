@@ -29,6 +29,10 @@ export interface SpeedMetrics {
     /** Number of requests that contributed a TTFT sample */
     ttftSampleCount: number;
 
-    /** Complete input tokens (incl. cache read/creation) of the TTFT-sampled requests, for prefill throughput */
+    /**
+     * 真正参与 prefill 计算的 token（未缓存输入 + 缓存写入）之和，取自
+     * 有 TTFT 样本的请求。缓存命中（cache read）直接读 KV cache、不经过
+     * 前向计算，故不计入，否则吞吐会被上下文长度稀释成虚高值。
+     */
     ttftInputTokens: number;
 }

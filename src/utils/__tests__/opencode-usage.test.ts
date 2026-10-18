@@ -139,17 +139,17 @@ describe('getOpenCodeUsageToken', () => {
         }
     });
 
-    it('prefers the opencode env key', () => {
+    it('prefers the anthropic env key used by Claude Code', () => {
         process.env.OPENCODE_API_KEY = 'env-opencode-key';
         process.env.ANTHROPIC_API_KEY = 'env-anthropic-key';
 
-        expect(getOpenCodeUsageToken()).toBe('env-opencode-key');
+        expect(getOpenCodeUsageToken()).toBe('env-anthropic-key');
     });
 
-    it('falls back to the anthropic env key', () => {
-        process.env.ANTHROPIC_API_KEY = 'env-anthropic-key';
+    it('falls back to the opencode env key', () => {
+        process.env.OPENCODE_API_KEY = 'env-opencode-key';
 
-        expect(getOpenCodeUsageToken()).toBe('env-anthropic-key');
+        expect(getOpenCodeUsageToken()).toBe('env-opencode-key');
     });
 
     it('falls back to the settings env block', () => {
@@ -158,8 +158,8 @@ describe('getOpenCodeUsageToken', () => {
         expect(getOpenCodeUsageToken()).toBe('settings-key');
     });
 
-    // The subscription entry (`opencode-go`) returns 403 on /usage — only the
-    // Zen entry may be used.
+    // auth.json 的 `opencode` 条目是 Zen key，作为最后一档兜底；若它已失效，
+    // 环境变量里的 ANTHROPIC_API_KEY（Claude Code 正在用的 opencode-go key）优先命中。
     it('falls back to the zen entry of the opencode auth file', () => {
         expect(getOpenCodeUsageToken()).toBe('zen-key');
     });
