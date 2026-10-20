@@ -36,6 +36,15 @@ import {
 import * as config from '../config';
 import { initConfigPath } from '../config';
 
+// `child_process` is a Node built-in, so vitest externalizes it and its module
+// namespace is read-only — `vi.mocked(childProcess.execSync)` fails outright
+// with "Cannot redefine property". Mock the module instead: execSync becomes a
+// writable vi.fn that still delegates to the real implementation by default.
+vi.mock('child_process', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('child_process')>();
+    return { ...actual, execSync: vi.fn(actual.execSync) };
+});
+
 const ORIGINAL_CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
 let testClaudeConfigDir = '';
 
@@ -865,59 +874,59 @@ describe('backup and error handling behavior', () => {
 
 describe('getClaudeCodeVersion', () => {
     it('should parse version from claude --version output', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.1.97 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.1.97 (Claude Code)\n');
         expect(getClaudeCodeVersion()).toBe('2.1.97');
     });
 
     it('should parse version without suffix text', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('3.0.0\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('3.0.0\n');
         expect(getClaudeCodeVersion()).toBe('3.0.0');
     });
 
     it('should return null when claude is not installed', () => {
-        vi.spyOn(childProcess, 'execSync').mockImplementation(() => { throw new Error('not found'); });
+        vi.mocked(childProcess.execSync).mockImplementation(() => { throw new Error('not found'); });
         expect(getClaudeCodeVersion()).toBeNull();
     });
 
     it('should return null for unexpected output', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('unknown output');
+        vi.mocked(childProcess.execSync).mockReturnValue('unknown output');
         expect(getClaudeCodeVersion()).toBeNull();
     });
 });
 
 describe('isClaudeCodeVersionAtLeast', () => {
     it('should return true when version equals minimum', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.1.97 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.1.97 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(true);
     });
 
     it('should return true when patch is higher', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.1.100 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.1.100 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(true);
     });
 
     it('should return true when minor is higher', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.2.0 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.2.0 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(true);
     });
 
     it('should return true when major is higher', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('3.0.0 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('3.0.0 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(true);
     });
 
     it('should return false when version is lower', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.1.96 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.1.96 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(false);
     });
 
     it('should return false when minor is lower', () => {
-        vi.spyOn(childProcess, 'execSync').mockReturnValue('2.0.100 (Claude Code)\n');
+        vi.mocked(childProcess.execSync).mockReturnValue('2.0.100 (Claude Code)\n');
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(false);
     });
 
     it('should return false when claude is not installed', () => {
-        vi.spyOn(childProcess, 'execSync').mockImplementation(() => { throw new Error('not found'); });
+        vi.mocked(childProcess.execSync).mockImplementation(() => { throw new Error('not found'); });
         expect(isClaudeCodeVersionAtLeast('2.1.97')).toBe(false);
     });
 });

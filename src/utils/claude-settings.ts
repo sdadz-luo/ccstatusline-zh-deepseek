@@ -266,69 +266,7 @@ export function getPackageCommandAvailability(): PackageCommandAvailability {
     };
 }
 
-// `claude --version` boots the whole CLI (~98ms measured on Windows) and the
-// answer only changes when Claude Code is upgraded, so memoize it per process
-// and cache it for a day across processes.
-// Lives under the Claude config dir rather than the shared temp directory, so the
-// file is per-user and not writable by other accounts on the machine.
-const CLAUDE_VERSION_CACHE = path.join(getClaudeConfigDir(), 'ccstatusline-claude-version.json');
-const CLAUDE_VERSION_TTL_MS = 24 * 60 * 60 * 1000;
-let claudeVersionMemo: string | null | undefined;
-
-/**
- * Read the cache, returning undefined unless the entry is a plain file holding a
- * well-formed version and a sane timestamp. A symlink, a poisoned payload, or a
- * future timestamp is treated as a cache miss.
- */
-function readVersionCache(): string | undefined {
-    try {
-        if (!fs.lstatSync(CLAUDE_VERSION_CACHE).isFile()) {
-            return undefined;
-        }
-        const cached = JSON.parse(fs.readFileSync(CLAUDE_VERSION_CACHE, 'utf-8')) as { v?: unknown; t?: unknown };
-        if (typeof cached.t !== 'number' || cached.t > Date.now() || Date.now() - cached.t >= CLAUDE_VERSION_TTL_MS) {
-            return undefined;
-        }
-        if (typeof cached.v === 'string' && /^\d+\.\d+\.\d+$/.test(cached.v)) {
-            return cached.v;
-        }
-    } catch {
-        // Missing, unreadable, or malformed cache — fall through to a real query.
-    }
-    return undefined;
-}
-
-/**
- * Write the cache through an exclusively-created temp file plus an atomic
- * rename, so a pre-planted symlink at the target path cannot redirect the write.
- */
-function writeVersionCache(version: string): void {
-    const tmp = `${CLAUDE_VERSION_CACHE}.${process.pid}.${Date.now()}.tmp`;
-    try {
-        fs.writeFileSync(tmp, JSON.stringify({ v: version, t: Date.now() }), { flag: 'wx', mode: 0o600 });
-        fs.renameSync(tmp, CLAUDE_VERSION_CACHE);
-    } catch {
-        // Cache write failures are non-fatal.
-        try {
-            fs.unlinkSync(tmp);
-        } catch {
-            // Nothing was created — nothing to clean up.
-        }
-    }
-}
-
 export function getClaudeCodeVersion(): string | null {
-    if (claudeVersionMemo !== undefined) {
-        return claudeVersionMemo;
-    }
-
-    const cached = readVersionCache();
-    if (cached !== undefined) {
-        claudeVersionMemo = cached;
-        return claudeVersionMemo;
-    }
-
-    let version: string | null = null;
     try {
         const output = execSync('claude --version', {
             encoding: 'utf-8',
@@ -338,17 +276,10 @@ export function getClaudeCodeVersion(): string | null {
         }).trim();
         // Output is like "2.1.97 (Claude Code)" — extract the version number
         const match = /^(\d+\.\d+\.\d+)/.exec(output);
-        version = match?.[1] ?? null;
+        return match?.[1] ?? null;
     } catch {
-        version = null;
+        return null;
     }
-
-    claudeVersionMemo = version;
-    // Only cache a real answer: a transient failure should not stick for a day.
-    if (version !== null) {
-        writeVersionCache(version);
-    }
-    return version;
 }
 
 export function isClaudeCodeVersionAtLeast(minVersion: string): boolean {
