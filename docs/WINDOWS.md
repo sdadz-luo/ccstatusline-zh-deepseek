@@ -212,5 +212,6 @@ For the best experience, configure Windows Terminal with these recommended setti
 ## Performance on Windows
 
 `ccstatusline` includes Windows-specific runtime behavior:
-- **UTF-8 piped output fix**: In piped mode, it attempts to set code page `65001` for reliable symbol rendering
+- **Code page**: the status line reaches Claude Code over a pipe, where Node writes UTF-8 bytes regardless of the console code page, so the `chcp.com 65001` call is skipped by default — spawning it cost ~88ms per run. Set `CCSTATUSLINE_CHCP=1` if a terminal does show mojibake
+- **Claude Code version lookup**: `claude --version` boots the whole CLI (~98ms), so the result is memoized per process and cached for 24 hours in the temp directory
 - **Path compatibility**: Git and CWD widgets handle both `/` and `\` separators

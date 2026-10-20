@@ -326,7 +326,14 @@ async function main() {
 
     // Check if we're in a piped/non-TTY environment first
     if (!process.stdin.isTTY) {
-        await ensureWindowsUtf8CodePage();
+        // `chcp.com 65001` spawns a process and costs ~88ms per run on Windows,
+        // but the status line reaches Claude Code over a pipe — Node writes UTF-8
+        // bytes there regardless of the console code page, so this call does not
+        // affect our output. Opt back in with CCSTATUSLINE_CHCP=1 if a terminal
+        // ever shows mojibake.
+        if (process.env.CCSTATUSLINE_CHCP === '1') {
+            await ensureWindowsUtf8CodePage();
+        }
 
         // We're receiving piped input
         const input = await readStdin();

@@ -266,7 +266,29 @@ export function getPackageCommandAvailability(): PackageCommandAvailability {
     };
 }
 
+// `claude --version` boots the whole CLI (~98ms measured on Windows) and the
+// answer only changes when Claude Code is upgraded, so memoize it per process
+// and cache it for a day across processes.
+const CLAUDE_VERSION_CACHE = path.join(os.tmpdir(), 'ccstatusline-claude-version.json');
+const CLAUDE_VERSION_TTL_MS = 24 * 60 * 60 * 1000;
+let claudeVersionMemo: string | null | undefined;
+
 export function getClaudeCodeVersion(): string | null {
+    if (claudeVersionMemo !== undefined) {
+        return claudeVersionMemo;
+    }
+
+    try {
+        const cached = JSON.parse(fs.readFileSync(CLAUDE_VERSION_CACHE, 'utf-8')) as { v?: string | null; t?: number };
+        if (typeof cached.t === 'number' && Date.now() - cached.t < CLAUDE_VERSION_TTL_MS) {
+            claudeVersionMemo = cached.v ?? null;
+            return claudeVersionMemo;
+        }
+    } catch {
+        // No usable cache — fall through to a real query.
+    }
+
+    let version: string | null = null;
     try {
         const output = execSync('claude --version', {
             encoding: 'utf-8',
@@ -276,10 +298,21 @@ export function getClaudeCodeVersion(): string | null {
         }).trim();
         // Output is like "2.1.97 (Claude Code)" — extract the version number
         const match = /^(\d+\.\d+\.\d+)/.exec(output);
-        return match?.[1] ?? null;
+        version = match?.[1] ?? null;
     } catch {
-        return null;
+        version = null;
     }
+
+    claudeVersionMemo = version;
+    // Only cache a real answer: a transient failure should not stick for a day.
+    if (version !== null) {
+        try {
+            fs.writeFileSync(CLAUDE_VERSION_CACHE, JSON.stringify({ v: version, t: Date.now() }));
+        } catch {
+            // Cache write failures are non-fatal.
+        }
+    }
+    return version;
 }
 
 export function isClaudeCodeVersionAtLeast(minVersion: string): boolean {
