@@ -51,12 +51,14 @@ function makeTranscriptLine(params: {
     id?: string;
     isSidechain?: boolean;
     isApiErrorMessage?: boolean;
+    thinkingDurationMs?: number;
 }): string {
     return JSON.stringify({
         timestamp: params.timestamp,
         type: params.type,
         isSidechain: params.isSidechain,
         isApiErrorMessage: params.isApiErrorMessage,
+        thinkingDurationMs: params.thinkingDurationMs,
         message: typeof params.input === 'number' || typeof params.output === 'number'
             ? {
                 id: params.id,
@@ -709,6 +711,126 @@ describe('jsonl transcript metrics', () => {
             outputTokens: 250,
             totalTokens: 750,
             requestCount: 2
+        });
+    });
+
+    it('subtracts the inferred TTFT from the generation duration', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
+        tempRoots.push(root);
+        const transcriptPath = path.join(root, 'speed-ttft.jsonl');
+
+        // 首块（thinking）10:00:08 落盘、该段思考 6000ms → TTFT = 8000 - 6000 = 2000ms
+        fs.writeFileSync(transcriptPath, [
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:00:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_ttft_1',
+                timestamp: '2026-01-01T10:00:08.000Z',
+                type: 'assistant',
+                input: 100,
+                output: 800,
+                thinkingDurationMs: 6000
+            }),
+            makeTranscriptLine({
+                id: 'msg_ttft_1',
+                timestamp: '2026-01-01T10:00:10.000Z',
+                type: 'assistant',
+                input: 100,
+                output: 800
+            })
+        ].join('\n'));
+
+        const metrics = await getSpeedMetrics(transcriptPath);
+
+        expect(metrics).toEqual({
+            generationDurationMs: 8000,
+            inputTokens: 100,
+            outputTokens: 800,
+            totalTokens: 900,
+            requestCount: 1
+        });
+    });
+
+    it('estimates TTFT from the median sample for requests without thinkingDurationMs', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
+        tempRoots.push(root);
+        const transcriptPath = path.join(root, 'speed-ttft-estimate.jsonl');
+
+        // 请求 1 有样本：TTFT = 8000 - 6000 = 2000ms，区间 10s → 生成 8s
+        // 请求 2 无样本：区间 6s，按中位数 2000ms 估算 → 生成 4s
+        fs.writeFileSync(transcriptPath, [
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:00:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_ttft_a',
+                timestamp: '2026-01-01T10:00:08.000Z',
+                type: 'assistant',
+                input: 100,
+                output: 400,
+                thinkingDurationMs: 6000
+            }),
+            makeTranscriptLine({
+                id: 'msg_ttft_a',
+                timestamp: '2026-01-01T10:00:10.000Z',
+                type: 'assistant',
+                input: 100,
+                output: 400
+            }),
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:01:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_ttft_b',
+                timestamp: '2026-01-01T10:01:06.000Z',
+                type: 'assistant',
+                input: 50,
+                output: 300
+            })
+        ].join('\n'));
+
+        const metrics = await getSpeedMetrics(transcriptPath);
+
+        expect(metrics).toEqual({
+            generationDurationMs: 12000,
+            inputTokens: 150,
+            outputTokens: 700,
+            totalTokens: 850,
+            requestCount: 2
+        });
+    });
+
+    it('falls back to end-to-end duration when no request exposes a TTFT sample', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
+        tempRoots.push(root);
+        const transcriptPath = path.join(root, 'speed-no-ttft.jsonl');
+
+        fs.writeFileSync(transcriptPath, [
+            makeTranscriptLine({
+                timestamp: '2026-01-01T10:00:00.000Z',
+                type: 'user'
+            }),
+            makeTranscriptLine({
+                id: 'msg_plain',
+                timestamp: '2026-01-01T10:00:05.000Z',
+                type: 'assistant',
+                input: 50,
+                output: 200
+            })
+        ].join('\n'));
+
+        const metrics = await getSpeedMetrics(transcriptPath);
+
+        expect(metrics).toEqual({
+            generationDurationMs: 5000,
+            inputTokens: 50,
+            outputTokens: 200,
+            totalTokens: 250,
+            requestCount: 1
         });
     });
 

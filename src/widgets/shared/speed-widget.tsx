@@ -47,14 +47,14 @@ const SPEED_WIDGET_CONFIG: Record<SpeedWidgetKind, SpeedWidgetKindConfig> = {
     output: {
         label: '输出: ',
         displayName: '输出速度',
-        description: '端到端输出速度：输出 Token ÷ 请求时长（含首字延迟与排队，但剔除工具执行等待，tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        description: '解码速度：输出 Token ÷ 生成时长（已剔除首字延迟与工具等待；无首字样本的请求按会话中位数估算）。可选窗口：0-120 秒（0 = 全会话平均）。',
         sessionPreview: '42.5 t/s',
         windowedPreview: '26.8 t/s'
     },
     total: {
         label: '合计: ',
         displayName: '总速度',
-        description: '端到端总 Token 速度：输入+输出 ÷ 请求时长（与输出速度同分母，tokens/sec）。可选窗口：0-120 秒（0 = 全会话平均）。',
+        description: '解码口径的总 Token 速度：输入+输出 ÷ 生成时长（与输出速度同分母）。可选窗口：0-120 秒（0 = 全会话平均）。',
         sessionPreview: '127.7 t/s',
         windowedPreview: '58.3 t/s'
     }

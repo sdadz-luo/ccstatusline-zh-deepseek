@@ -42,6 +42,10 @@ interface SpeedRequest {
     inputTokens: number;
     outputTokens: number;
     assistantTimestampMs: number | null;
+    /** Message id 首次出现的时间戳（首块落盘时刻），与 thinkingMs 配合反推 TTFT */
+    firstTimestampMs: number | null;
+    /** 首块为 thinking 块时，CLI 记录的那段思考时长；缺失则 TTFT 不可分解 */
+    thinkingMs: number | null;
     interval: SpeedInterval | null;
 }
 
@@ -435,6 +439,14 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
                         existing.assistantTimestampMs = entryTimestampMs;
                     }
 
+                    // 合并分支只维护区间终点；首块时间戳保持首次出现值（正常时序下不会为空）
+                    if (existing.firstTimestampMs === null) {
+                        existing.firstTimestampMs = entryTimestampMs;
+                        if (existing.thinkingMs === null && typeof data.thinkingDurationMs === 'number') {
+                            existing.thinkingMs = data.thinkingDurationMs;
+                        }
+                    }
+
                     if (existing.interval) {
                         existing.interval.endMs = Math.max(existing.interval.endMs, entryTimestampMs);
                     }
@@ -461,6 +473,8 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
                 inputTokens,
                 outputTokens,
                 assistantTimestampMs: entryTimestampMs,
+                firstTimestampMs: entryTimestampMs,
+                thinkingMs: typeof data.thinkingDurationMs === 'number' ? data.thinkingDurationMs : null,
                 interval
             });
         }
@@ -490,6 +504,56 @@ function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSp
     };
 }
 
+/**
+ * 反推单次请求的首字延迟（TTFT）。
+ *
+ * 分块 transcript 里首块（thinking）落盘时刻 = 首 token 到达时刻 + 该段思考时长，
+ * CLI 在同一行附了 thinkingDurationMs，于是：
+ *   TTFT = 首块落盘时间 - 请求起点(上一条 user/tool_result) - thinkingDurationMs
+ * 结果超出 [0, 区间长度] 视为不可分解（无 thinking 块、字段缺失或计时边界异常），
+ * 返回 null，由调用方用会话中位数估算。
+ */
+function computeRequestTtftMs(request: SpeedRequest): number | null {
+    if (request.firstTimestampMs === null || request.thinkingMs === null || !request.interval) {
+        return null;
+    }
+
+    const ttftMs = request.firstTimestampMs - request.interval.startMs - request.thinkingMs;
+    const intervalDurationMs = request.interval.endMs - request.interval.startMs;
+    if (ttftMs < 0 || ttftMs > intervalDurationMs) {
+        return null;
+    }
+
+    return ttftMs;
+}
+
+function median(values: number[]): number | null {
+    if (values.length === 0) {
+        return null;
+    }
+
+    const sorted = values.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 1) {
+        return sorted[middle] ?? null;
+    }
+
+    const lower = sorted[middle - 1];
+    const upper = sorted[middle];
+    return lower !== undefined && upper !== undefined ? (lower + upper) / 2 : null;
+}
+
+function collectTtftSamples(requests: SpeedRequest[]): number[] {
+    const samples: number[] = [];
+    for (const request of requests) {
+        const ttftMs = computeRequestTtftMs(request);
+        if (ttftMs !== null) {
+            samples.push(ttftMs);
+        }
+    }
+    return samples;
+}
+
 function buildSpeedMetrics(
     collected: CollectedSpeedMetrics,
     windowSeconds?: number
@@ -513,33 +577,58 @@ function buildSpeedMetrics(
         )
         : collected.requests;
 
+    // TTFT 估算：约四成请求没有 thinkingDurationMs，无法反推首 token。为免这些请求
+    // 退回端到端（分母多出数秒等待、速度被稀释数倍），用中位数补齐。优先用窗口内
+    // 中位数——代理排队会成片波动，全会话中位数在高峰时段会把速度压得过低；窗口内
+    // 样本不足 2 个时才退回全会话。
+    const windowTtftSamples = collectTtftSamples(selectedRequests);
+    const fallbackTtftMs = windowTtftSamples.length >= 2
+        ? median(windowTtftSamples)
+        : median(collectTtftSamples(collected.requests));
+
     let inputTokens = 0;
     let outputTokens = 0;
     const intervals: SpeedInterval[] = [];
 
     for (const request of selectedRequests) {
-        inputTokens += request.inputTokens;
-        outputTokens += request.outputTokens;
-
+        // 无条件计入 token（含无时间戳的请求），保持与 token 统计一致
         if (!request.interval) {
+            inputTokens += request.inputTokens;
+            outputTokens += request.outputTokens;
             continue;
         }
 
-        // 分母是端到端区间：请求起点（上一条 user/tool_result）到末块落盘。
-        // transcript 没有首 token 时刻，扣 TTFT 只能靠块级时间戳反推，实测会虚高数倍。
-        const clippedStartMs = windowStartMs !== null
+        let clippedStartMs = windowStartMs !== null
             ? Math.max(request.interval.startMs, windowStartMs)
             : request.interval.startMs;
         const clippedEndMs = windowEndMs !== null
             ? Math.min(request.interval.endMs, windowEndMs)
             : request.interval.endMs;
 
-        if (clippedEndMs > clippedStartMs) {
-            intervals.push({
-                startMs: clippedStartMs,
-                endMs: clippedEndMs
-            });
+        // 生成段从「请求起点 + TTFT」起算，把排队与首字等待从分母剔除；
+        // 无样本请求用中位数估算，估算值最多占区间的 80%，避免短请求被整个扣没。
+        const ttftMs = computeRequestTtftMs(request) ?? fallbackTtftMs;
+        if (ttftMs !== null) {
+            const intervalDurationMs = request.interval.endMs - request.interval.startMs;
+            const appliedTtftMs = Math.min(Math.max(ttftMs, 0), intervalDurationMs * 0.8);
+            clippedStartMs = Math.max(
+                clippedStartMs,
+                Math.min(request.interval.startMs + appliedTtftMs, clippedEndMs)
+            );
         }
+
+        // 扣减后没有剩余时间：该请求无法归入解码口径，分子分母一并排除，
+        // 否则会出现 token 照算、时长不计的速度虚高。
+        if (clippedEndMs <= clippedStartMs) {
+            continue;
+        }
+
+        inputTokens += request.inputTokens;
+        outputTokens += request.outputTokens;
+        intervals.push({
+            startMs: clippedStartMs,
+            endMs: clippedEndMs
+        });
     }
 
     const mergedIntervals = mergeIntervals(intervals);

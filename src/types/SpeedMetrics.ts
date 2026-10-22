@@ -4,10 +4,11 @@
  */
 export interface SpeedMetrics {
     /**
-     * Wall-clock duration in milliseconds: the merged user→assistant intervals.
-     * Tool execution waits are excluded by the interval definition, but the wait
-     * for the first token (prefill, queueing, network) is included because the
-     * transcript carries no first-token timestamp to subtract it.
+     * Generation duration in milliseconds: the merged user→assistant intervals
+     * with each request's TTFT removed. Tool execution waits are already excluded
+     * by the interval definition. Requests without a thinkingDurationMs sample are
+     * trimmed by the session's median TTFT, so the denominator stays comparable
+     * across requests that do and do not expose a first-token timestamp.
      */
     generationDurationMs: number;
 

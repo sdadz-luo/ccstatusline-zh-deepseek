@@ -91,7 +91,7 @@ sirmalloc/ccstatusline            英文原版
 | 6  | 用量百分比为整数时**不再补 `.0`** 小数位（避免暗示不存在的 0.1 分辨率） | `e9c0760` | 数据源给出整数时 |
 | 7  | 构建脚本去掉 `rm -rf`，**Windows 下可直接 `bun run build`** | `7099b1b` | — |
 | 8  | 组件总数 88 → 89（新增「月用量」的注册、清单与测试） | `e55d0fb` | — |
-| 9  | 速度类组件的分母改为**端到端时长**（请求起点 → 分块末条时间戳），不再尝试扣除首字延迟 | 本次修改 | 始终生效 |
+| 9  | 速度类组件的分母改为**解码时长**：请求起点 → 分块末条时间戳，再扣除首字延迟；无 `thinkingDurationMs` 的请求按会话 TTFT 中位数估算 | 本次修改 | 始终生效 |
 | 10 | 下线「**输入速度**」与「**首字延迟 (TTFT)**」组件（组件总数 90 → 88）：二者的分母都是 transcript 无法提供的首 token 时刻 | 本次修改 | 旧配置里的这两项在加载时自动剔除 |
 
 第 1–5 处与第 9 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
@@ -140,15 +140,20 @@ sirmalloc/ccstatusline            英文原版
 
 部分第三方代理会把同一次 API 调用拆成 thinking / text / tool_use 等多条分块记录写入 transcript，且每条都携带完整的 usage。上游逐条累加，会让输入、输出、缓存 token 虚高数倍。本 Fork 改为按 `message.id` 去重后再累加；速度类组件（输出 / 总速度）也按 `message.id` 把一次调用只计作一个请求。
 
-### 速度口径（末块终点 + 端到端）
+### 速度口径（末块终点 + 扣除首字延迟）
 
 速度组件的分母是「上一条 user / tool_result 记录 → 该次调用某条分块记录」的区间并按并集合并。上游取该消息**首块**的时间戳，但代理的分块记录是在各内容块（thinking / text / tool_use）完成时逐条落盘的，首块远早于响应结束，末块之后才是真正的生成终点——末尾常是大段 tool_use 的 JSON。沿用首块时间戳会把这段生成时间漏出分母，使速度虚高。
 
 本 Fork 改为取该消息**末块**时间戳作区间终点。同一 transcript 实测：会话平均输出速度由 172.0 t/s 修正为 145.2 t/s（约 −16%），单回合最大偏差 2.5 倍（大段 tool_use 的回合）。
 
-分母的起点仍是「上一条 user / tool_result 记录」，因此区间包含请求在途、代理排队与首 token 等待（本机实测 1.2–3.0 s）。本 Fork 曾尝试用首块时间戳与 `thinkingDurationMs` 反推 TTFT 并从分母中扣除，但 transcript 是**块级落盘**而非逐 token，同一消息各块时间戳只差几十毫秒，反推会把分母压缩 2–4 倍，输出的数字（170–190 t/s）明显高于真实生成速率；而没有 thinking 块的响应又完全拿不到该字段，口径在两类响应间不一致。因此本 Fork 回到 **端到端口径**：分子 = 输出（或输入+输出）token，分母 = 请求起点到末块落盘。
+分母的起点仍是「上一条 user / tool_result 记录」，区间包含请求在途、代理排队与首 token 等待。DeepSeek 代理下这段等待很长：本机实测 **TTFT 中位数 4.3–4.9 s**，而单次解码中位数只有 1.6 s——直接端到端计算会把 160 t/s 的解码速度稀释到 40–50 t/s，60 秒窗口下甚至只剩 20 t/s。因此本 Fork 扣除 TTFT：
 
-> 该口径包含首字等待与网络回传，短响应会被稀释得偏低，但同一会话内所有响应口径一致，数值可与不同工具横向对比。若需要 DSH 那种「纯解码速度」，前提是运行时能提供首 token 时刻（SSE 事件），Claude Code 的 transcript 不具备这一信息。
+- **可反推的请求**（约六成）：首块是 thinking 块时，CLI 会在同一行附 `thinkingDurationMs`，于是 `TTFT = 首块落盘时间 − 请求起点 − thinkingDurationMs`。
+- **其余请求**：用同窗口（样本 ≥3）或全会话的 TTFT 中位数估算扣减，估算值最多占区间的 80%，避免短请求被整个扣没；扣减后无剩余时间的请求不计入分子分母。
+
+扣除后，单个请求的解码速度与 DeepSeek Harness（DSH）的 `completedTime − firstTokenTime` 口径一致：同一 transcript 实测 164 t/s（DSH 约 180）。窗口平均值仍会被 TTFT 十几秒的长排队请求拉低，这是真实状态，不是算法偏差。
+
+> 已知限制：transcript 中 `output_tokens_details.thinking_tokens` 恒为 0，推理 token 可能未计入分子，思考占比高的请求读数偏低；`thinkingDurationMs` 缺失时只能估算。DSH 直连 API 且持有真实首 token 时间戳，不受这两点影响。
 
 ### 子代理用量汇总
 
@@ -187,7 +192,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 - **自定义颜色** — 每个组件支持独立的前景色和背景色设置
 - **自定义命令 & 文本 & 符号** — 可嵌入自定义 Shell 命令输出、静态文本或单字符符号/Emoji
 - **可点击链接** — 支持 OSC8 终端超链接（Git 分支、Git PR、仓库根目录等可配置）
-- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度口径修正（末块终点 + 端到端口径，下线输入速度与首字延迟组件）、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
+- **DeepSeek / opencode 适配** — 会话费用按官方峰谷价分时计价（价格表可外部覆盖）、代理 token 去重、速度口径修正（末块终点 + 扣除首字延迟、缺失时中位数估算；下线输入速度与首字延迟组件）、子代理用量汇总、opencode 套餐用量数据源（含月用量组件），详见 [本 Fork 的改动](#-本-fork-的改动)
 - **跨平台** — 支持 macOS、Linux、Windows
 
 ---
@@ -371,8 +376,8 @@ node "/home/you/.claude/tools/ccstatusline-zh-deepseek/dist/ccstatusline.js" --c
 
 | 组件     | 说明                                   |
 | -------- | -------------------------------------- |
-| 输出速度 | 显示端到端输出速度（含首字延迟，tok/s） |
-| 总速度   | 显示端到端总速度（输入+输出，tok/s）    |
+| 输出速度 | 显示解码速度（已扣除首字延迟，tok/s） |
+| 总速度   | 显示解码口径的总速度（输入+输出，tok/s） |
 
 ### 上下文
 
@@ -527,8 +532,8 @@ bun test
 | --------------------------------- | ------------------------------------------------------------ |
 | `src/utils/deepseek-pricing.ts`   | 峰谷价格表、`deepseek-pricing.json` 覆盖读取、波峰时段判定   |
 | `src/utils/opencode-usage.ts`     | opencode go 用量接口：凭据解析（优先 Claude Code 当前 key）、响应解析、窗口映射 |
-| `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、端到端时长、子代理汇总、峰谷分桶 |
-| `src/utils/speed-metrics.ts`      | 速度口径：端到端时长分母与格式化                             |
+| `src/utils/jsonl-metrics.ts`      | 按 `message.id` 去重、速度区间取分块末条时间戳、TTFT 反推与中位数估算、子代理汇总、峰谷分桶 |
+| `src/utils/speed-metrics.ts`      | 速度口径：解码时长分母与格式化                               |
 | `src/utils/usage-fetch.ts`        | 用量数据源分派（Claude / opencode）与按源隔离的缓存          |
 | `src/widgets/MonthlyUsage.ts`     | 新增「月用量」组件                                           |
 | `src/widgets/shared/usage-display.ts` | `formatUsagePercent()`：整数百分比不补 `.0`              |
