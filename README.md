@@ -91,8 +91,8 @@ sirmalloc/ccstatusline            英文原版
 | 6  | 用量百分比为整数时**不再补 `.0`** 小数位（避免暗示不存在的 0.1 分辨率） | `e9c0760` | 数据源给出整数时 |
 | 7  | 构建脚本去掉 `rm -rf`，**Windows 下可直接 `bun run build`** | `7099b1b` | — |
 | 8  | 组件总数 88 → 89（新增「月用量」的注册、清单与测试） | `e55d0fb` | — |
-| 9  | 速度类组件的分母改为**解码时长**：请求起点 → 分块末条时间戳，再扣除首字延迟；无 `thinkingDurationMs` 的请求按会话 TTFT 中位数估算 | 本次修改 | 始终生效 |
-| 10 | 下线「**输入速度**」与「**首字延迟 (TTFT)**」组件（组件总数 90 → 88）：二者的分母都是 transcript 无法提供的首 token 时刻 | 本次修改 | 旧配置里的这两项在加载时自动剔除 |
+| 9  | 速度类组件的分母改为**解码时长**：请求起点 → 分块末条时间戳，再扣除首字延迟；无 `thinkingDurationMs` 的请求按会话 TTFT 中位数估算 | `33dc49f` | 始终生效 |
+| 10 | 下线「**输入速度**」与「**首字延迟 (TTFT)**」组件（组件总数 90 → 88）：二者的分母都是 transcript 无法提供的首 token 时刻 | `da21f17` | 旧配置里的这两项在加载时自动剔除 |
 
 第 1–5 处与第 9 处的原理、口径与已知限制见 [DeepSeek 适配](#-deepseek-适配)。另外两处补充说明：
 
@@ -149,9 +149,9 @@ sirmalloc/ccstatusline            英文原版
 分母的起点仍是「上一条 user / tool_result 记录」，区间包含请求在途、代理排队与首 token 等待。DeepSeek 代理下这段等待很长：本机实测 **TTFT 中位数 4.3–4.9 s**，而单次解码中位数只有 1.6 s——直接端到端计算会把 160 t/s 的解码速度稀释到 40–50 t/s，60 秒窗口下甚至只剩 20 t/s。因此本 Fork 扣除 TTFT：
 
 - **可反推的请求**（约六成）：首块是 thinking 块时，CLI 会在同一行附 `thinkingDurationMs`，于是 `TTFT = 首块落盘时间 − 请求起点 − thinkingDurationMs`。
-- **其余请求**：用同窗口（样本 ≥3）或全会话的 TTFT 中位数估算扣减，估算值最多占区间的 80%，避免短请求被整个扣没；扣减后无剩余时间的请求不计入分子分母。
+- **其余请求**：用同窗口（样本 ≥2）或全会话的 TTFT 中位数估算扣减，估算值最多占区间的 80%，避免短请求被整个扣没；扣减后无剩余时间的请求不计入分子分母。
 
-扣除后，单个请求的解码速度与 DeepSeek Harness（DSH）的 `completedTime − firstTokenTime` 口径一致：同一 transcript 实测 164 t/s（DSH 约 180）。窗口平均值仍会被 TTFT 十几秒的长排队请求拉低，这是真实状态，不是算法偏差。
+扣除后，单个请求的解码速度与 DeepSeek Harness（DSH）的 `completedTime − firstTokenTime` 口径一致：同一 transcript 实测 164–209 t/s（DSH 约 180）。窗口平均值仍会被 TTFT 十几秒的长排队请求拉低，这是真实状态，不是算法偏差。
 
 > 已知限制：transcript 中 `output_tokens_details.thinking_tokens` 恒为 0，推理 token 可能未计入分子，思考占比高的请求读数偏低；`thinkingDurationMs` 缺失时只能估算。DSH 直连 API 且持有真实首 token 时间戳，不受这两点影响。
 
