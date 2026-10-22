@@ -9,6 +9,7 @@ import {
     type Settings
 } from '../../types/Settings';
 import {
+    dropRemovedWidgetTypes,
     filterWidgetCatalog,
     getAllWidgetTypes,
     getMatchSegments,
@@ -33,7 +34,6 @@ describe('widget catalog', () => {
         const link = catalog.find(entry => entry.type === 'link');
         const gitInsertions = catalog.find(entry => entry.type === 'git-insertions');
         const gitDeletions = catalog.find(entry => entry.type === 'git-deletions');
-        const inputSpeed = catalog.find(entry => entry.type === 'input-speed');
         const outputSpeed = catalog.find(entry => entry.type === 'output-speed');
         const totalSpeed = catalog.find(entry => entry.type === 'total-speed');
         const resetTimer = catalog.find(entry => entry.type === 'reset-timer');
@@ -49,8 +49,6 @@ describe('widget catalog', () => {
         expect(gitInsertions?.category).toBe('Git');
         expect(gitDeletions?.displayName).toBe('Git 删除');
         expect(gitDeletions?.category).toBe('Git');
-        expect(inputSpeed?.displayName).toBe('输入速度');
-        expect(inputSpeed?.category).toBe('Token 速度');
         expect(outputSpeed?.displayName).toBe('输出速度');
         expect(outputSpeed?.category).toBe('Token 速度');
         expect(totalSpeed?.displayName).toBe('总速度');
@@ -148,6 +146,31 @@ describe('legacy widget type aliases', () => {
         const types = new Set(catalog.map(entry => entry.type));
         expect(types.has('git-review')).toBe(true);
         expect(types.has('git-pr')).toBe(false);
+    });
+});
+
+describe('removed widget types', () => {
+    it('drops retired speed widgets from loaded lines', () => {
+        const lines = dropRemovedWidgetTypes([
+            [
+                { id: '1', type: 'input-speed' },
+                { id: '2', type: 'output-speed' },
+                { id: '3', type: 'ttft' },
+                { id: '4', type: 'total-speed' }
+            ]
+        ]);
+
+        expect(lines).toEqual([
+            [
+                { id: '2', type: 'output-speed' },
+                { id: '4', type: 'total-speed' }
+            ]
+        ]);
+    });
+
+    it('no longer treats retired types as known widgets', () => {
+        expect(isKnownWidgetType('input-speed')).toBe(false);
+        expect(isKnownWidgetType('ttft')).toBe(false);
     });
 });
 

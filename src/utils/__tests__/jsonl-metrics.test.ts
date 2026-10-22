@@ -51,14 +51,12 @@ function makeTranscriptLine(params: {
     id?: string;
     isSidechain?: boolean;
     isApiErrorMessage?: boolean;
-    thinkingDurationMs?: number;
 }): string {
     return JSON.stringify({
         timestamp: params.timestamp,
         type: params.type,
         isSidechain: params.isSidechain,
         isApiErrorMessage: params.isApiErrorMessage,
-        thinkingDurationMs: params.thinkingDurationMs,
         message: typeof params.input === 'number' || typeof params.output === 'number'
             ? {
                 id: params.id,
@@ -656,9 +654,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 12000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 600,
             outputTokens: 300,
             totalTokens: 900,
@@ -710,97 +705,10 @@ describe('jsonl transcript metrics', () => {
         // 首块口径为 9000ms（5s + 4s），末块口径为 13000ms（9s + 4s）
         expect(metrics).toEqual({
             generationDurationMs: 13000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 500,
             outputTokens: 250,
             totalTokens: 750,
             requestCount: 2
-        });
-    });
-
-    it('infers TTFT from thinkingDurationMs and excludes it from generation duration', async () => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
-        tempRoots.push(root);
-        const transcriptPath = path.join(root, 'speed-ttft.jsonl');
-
-        // 首块（thinking）10:00:08 落盘、该段思考 6000ms → TTFT = 8000 - 0 - 6000 = 2000ms；
-        // 纯生成时长 = 10s - 2s = 8s（分母已剔除首字等待）。
-        // prefill 只计未缓存输入 + 缓存写入（100 + 200），缓存命中的 5000 不计入。
-        fs.writeFileSync(transcriptPath, [
-            makeTranscriptLine({
-                timestamp: '2026-01-01T10:00:00.000Z',
-                type: 'user'
-            }),
-            makeTranscriptLine({
-                id: 'msg_ttft_1',
-                timestamp: '2026-01-01T10:00:08.000Z',
-                type: 'assistant',
-                input: 100,
-                output: 800,
-                cacheRead: 5000,
-                cacheCreate: 200,
-                thinkingDurationMs: 6000
-            }),
-            makeTranscriptLine({
-                id: 'msg_ttft_1',
-                timestamp: '2026-01-01T10:00:10.000Z',
-                type: 'assistant',
-                input: 100,
-                output: 800,
-                cacheRead: 5000,
-                cacheCreate: 200
-            })
-        ].join('\n'));
-
-        const metrics = await getSpeedMetrics(transcriptPath);
-
-        expect(metrics).toEqual({
-            generationDurationMs: 8000,
-            ttftMsSum: 2000,
-            ttftSampleCount: 1,
-            ttftInputTokens: 300,
-            inputTokens: 100,
-            outputTokens: 800,
-            totalTokens: 900,
-            requestCount: 1
-        });
-    });
-
-    it('drops TTFT samples when the thinking duration exceeds the turnaround', async () => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-jsonl-speed-'));
-        tempRoots.push(root);
-        const transcriptPath = path.join(root, 'speed-ttft-invalid.jsonl');
-
-        // thinking 时长（5s）超过首块间隔（3s）→ TTFT 为负，视为不可分解：
-        // 不扣减分母、也不进入 TTFT 统计
-        fs.writeFileSync(transcriptPath, [
-            makeTranscriptLine({
-                timestamp: '2026-01-01T10:00:00.000Z',
-                type: 'user'
-            }),
-            makeTranscriptLine({
-                id: 'msg_ttft_bad',
-                timestamp: '2026-01-01T10:00:03.000Z',
-                type: 'assistant',
-                input: 50,
-                output: 60,
-                thinkingDurationMs: 5000
-            })
-        ].join('\n'));
-
-        const metrics = await getSpeedMetrics(transcriptPath);
-
-        expect(metrics).toEqual({
-            generationDurationMs: 3000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
-            inputTokens: 50,
-            outputTokens: 60,
-            totalTokens: 110,
-            requestCount: 1
         });
     });
 
@@ -846,9 +754,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 20000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 500,
             outputTokens: 250,
             totalTokens: 750,
@@ -888,9 +793,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metricsCollection.sessionAverage).toEqual({
             generationDurationMs: 20000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 300,
             outputTokens: 150,
             totalTokens: 450,
@@ -898,9 +800,6 @@ describe('jsonl transcript metrics', () => {
         });
         expect(metricsCollection.windowed['30']).toEqual({
             generationDurationMs: 10000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 200,
             outputTokens: 100,
             totalTokens: 300,
@@ -908,9 +807,6 @@ describe('jsonl transcript metrics', () => {
         });
         expect(metricsCollection.windowed['90']).toEqual({
             generationDurationMs: 20000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 300,
             outputTokens: 150,
             totalTokens: 450,
@@ -954,9 +850,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 3000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 100,
             outputTokens: 50,
             totalTokens: 150,
@@ -1008,9 +901,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 4000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 10,
             outputTokens: 20,
             totalTokens: 30,
@@ -1079,9 +969,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 20000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 225,
             outputTokens: 450,
             totalTokens: 675,
@@ -1135,9 +1022,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 4000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 30,
             outputTokens: 60,
             totalTokens: 90,
@@ -1202,9 +1086,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 7000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 30,
             outputTokens: 50,
             totalTokens: 80,
@@ -1256,9 +1137,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 7000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 25,
             outputTokens: 45,
             totalTokens: 70,
@@ -1296,9 +1174,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 3000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 30,
             outputTokens: 60,
             totalTokens: 90,
@@ -1350,9 +1225,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 6000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 15,
             outputTokens: 35,
             totalTokens: 50,
@@ -1386,9 +1258,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 3000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 30,
             outputTokens: 60,
             totalTokens: 90,
@@ -1448,9 +1317,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 3000,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 30,
             outputTokens: 60,
             totalTokens: 90,
@@ -1469,9 +1335,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 0,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 0,
             outputTokens: 0,
             totalTokens: 0,
@@ -1500,9 +1363,6 @@ describe('jsonl transcript metrics', () => {
 
         expect(metrics).toEqual({
             generationDurationMs: 0,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 7,
             outputTokens: 9,
             totalTokens: 16,
@@ -1514,9 +1374,6 @@ describe('jsonl transcript metrics', () => {
         const metrics = await getSpeedMetrics('/tmp/ccstatusline-jsonl-speed-missing.jsonl');
         expect(metrics).toEqual({
             generationDurationMs: 0,
-            ttftMsSum: 0,
-            ttftSampleCount: 0,
-            ttftInputTokens: 0,
             inputTokens: 0,
             outputTokens: 0,
             totalTokens: 0,

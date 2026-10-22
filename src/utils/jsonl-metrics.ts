@@ -41,13 +41,7 @@ interface SpeedInterval {
 interface SpeedRequest {
     inputTokens: number;
     outputTokens: number;
-    cacheReadTokens: number;
-    cacheCreationTokens: number;
     assistantTimestampMs: number | null;
-    /** Message id 首次出现的时间戳（首块落盘时刻），与 thinkingMs 配合反推 TTFT */
-    firstTimestampMs: number | null;
-    /** 首块为 thinking 块时，CLI 记录的那段思考时长；缺失则 TTFT 不可分解 */
-    thinkingMs: number | null;
     interval: SpeedInterval | null;
 }
 
@@ -379,10 +373,7 @@ function createEmptySpeedMetrics(): SpeedMetrics {
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
-        requestCount: 0,
-        ttftMsSum: 0,
-        ttftSampleCount: 0,
-        ttftInputTokens: 0
+        requestCount: 0
     };
 }
 
@@ -400,8 +391,8 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
 
     // 同一次 API 调用（同一 message.id）的分块记录只算一个请求：token 只累加一次，
     // 区间终点还必须取该消息最后一块的时间戳。代理把一次调用按内容块（thinking /
-    // text / tool_use）拆成多条记录、每块完成时逐条落盘，首块时间戳远早于响应结束，
-    // 用它作分母会漏掉末尾内容块的生成时间，使速度虚高（实测末尾常是大段 tool_use）。
+    // text / tool_use）拆成多条记录、每块完成时逐条落盘，只用首块时间戳作终点会
+    // 漏掉末尾内容块的生成时间，使速度虚高。
     const requestIndexById = new Map<string, number>();
 
     let lastUserTimestamp: Date | null = null;
@@ -444,14 +435,6 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
                         existing.assistantTimestampMs = entryTimestampMs;
                     }
 
-                    // 合并分支只维护区间终点；首块时间戳保持首次出现值（正常时序下不会为空）
-                    if (existing.firstTimestampMs === null) {
-                        existing.firstTimestampMs = entryTimestampMs;
-                        if (existing.thinkingMs === null && typeof data.thinkingDurationMs === 'number') {
-                            existing.thinkingMs = data.thinkingDurationMs;
-                        }
-                    }
-
                     if (existing.interval) {
                         existing.interval.endMs = Math.max(existing.interval.endMs, entryTimestampMs);
                     }
@@ -466,8 +449,6 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
 
             const inputTokens = data.message.usage.input_tokens || 0;
             const outputTokens = data.message.usage.output_tokens || 0;
-            const cacheReadTokens = data.message.usage.cache_read_input_tokens ?? 0;
-            const cacheCreationTokens = data.message.usage.cache_creation_input_tokens ?? 0;
             let interval: SpeedInterval | null = null;
             if (entryTimestampMs !== null && lastUserTimestamp) {
                 const startMs = lastUserTimestamp.getTime();
@@ -479,11 +460,7 @@ function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean)
             requests.push({
                 inputTokens,
                 outputTokens,
-                cacheReadTokens,
-                cacheCreationTokens,
                 assistantTimestampMs: entryTimestampMs,
-                firstTimestampMs: entryTimestampMs,
-                thinkingMs: typeof data.thinkingDurationMs === 'number' ? data.thinkingDurationMs : null,
                 interval
             });
         }
@@ -513,29 +490,6 @@ function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSp
     };
 }
 
-/**
- * 反推单次请求的首字延迟（TTFT）。
- *
- * 分块 transcript 里首块（thinking）落盘时刻 = 首 token 到达时刻 + 该段思考时长，
- * CLI 在同一行附了 thinkingDurationMs，于是：
- *   TTFT = 首块落盘时间 - 请求起点(上一条 user/tool_result) - thinkingDurationMs
- * 结果超出 [0, 区间长度] 视为不可分解（无 thinking 块、字段缺失或计时边界异常），
- * 返回 null：该请求不扣减分母、也不进入 TTFT 统计。
- */
-function computeRequestTtftMs(request: SpeedRequest): number | null {
-    if (request.firstTimestampMs === null || request.thinkingMs === null || !request.interval) {
-        return null;
-    }
-
-    const ttftMs = request.firstTimestampMs - request.interval.startMs - request.thinkingMs;
-    const intervalDurationMs = request.interval.endMs - request.interval.startMs;
-    if (ttftMs < 0 || ttftMs > intervalDurationMs) {
-        return null;
-    }
-
-    return ttftMs;
-}
-
 function buildSpeedMetrics(
     collected: CollectedSpeedMetrics,
     windowSeconds?: number
@@ -561,9 +515,6 @@ function buildSpeedMetrics(
 
     let inputTokens = 0;
     let outputTokens = 0;
-    let ttftMsSum = 0;
-    let ttftSampleCount = 0;
-    let ttftInputTokens = 0;
     const intervals: SpeedInterval[] = [];
 
     for (const request of selectedRequests) {
@@ -574,30 +525,14 @@ function buildSpeedMetrics(
             continue;
         }
 
-        const ttftMs = computeRequestTtftMs(request);
-        if (ttftMs !== null) {
-            // TTFT 均值只收完整落在窗口内的样本；跨窗口边界的请求扣减分母时仍按裁剪处理
-            const ttftFullyInsideWindow = windowStartMs === null || request.interval.startMs >= windowStartMs;
-            if (ttftFullyInsideWindow) {
-                ttftMsSum += ttftMs;
-                ttftSampleCount += 1;
-                // prefill 只计算未命中缓存的 token：cache read 直接从 KV cache 取，
-                // 不经过前向计算；cache creation 与未缓存输入一样要过一遍 prefill。
-                ttftInputTokens += request.inputTokens + request.cacheCreationTokens;
-            }
-        }
-
-        let clippedStartMs = request.interval.startMs;
-        let clippedEndMs = request.interval.endMs;
-        if (windowStartMs !== null && windowEndMs !== null) {
-            clippedStartMs = Math.max(clippedStartMs, windowStartMs);
-            clippedEndMs = Math.min(clippedEndMs, windowEndMs);
-        }
-
-        // 生成段从「请求起点 + TTFT」起算，即把排队与首字等待从分母里剔除
-        if (ttftMs !== null) {
-            clippedStartMs = Math.max(clippedStartMs, Math.min(request.interval.startMs + ttftMs, clippedEndMs));
-        }
+        // 分母是端到端区间：请求起点（上一条 user/tool_result）到末块落盘。
+        // transcript 没有首 token 时刻，扣 TTFT 只能靠块级时间戳反推，实测会虚高数倍。
+        const clippedStartMs = windowStartMs !== null
+            ? Math.max(request.interval.startMs, windowStartMs)
+            : request.interval.startMs;
+        const clippedEndMs = windowEndMs !== null
+            ? Math.min(request.interval.endMs, windowEndMs)
+            : request.interval.endMs;
 
         if (clippedEndMs > clippedStartMs) {
             intervals.push({
@@ -615,10 +550,7 @@ function buildSpeedMetrics(
         inputTokens,
         outputTokens,
         totalTokens: inputTokens + outputTokens,
-        requestCount: selectedRequests.length,
-        ttftMsSum,
-        ttftSampleCount,
-        ttftInputTokens
+        requestCount: selectedRequests.length
     };
 }
 

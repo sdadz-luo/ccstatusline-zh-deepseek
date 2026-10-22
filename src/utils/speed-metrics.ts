@@ -3,11 +3,12 @@ import type { SpeedMetrics } from '../types/SpeedMetrics';
 /**
  * Calculates output tokens per second from speed metrics.
  *
- * 分母用纯生成时长（已剔除 TTFT 与工具等待），而非端到端时长，
- * 否则短响应会被数秒的首字延迟稀释，显示值远低于实际生成速度。
+ * 口径是端到端：分子为该批次输出 token 总量，分母为请求起点到末块落盘的时刻差。
+ * transcript 不记录首 token 时刻，任何"扣除 TTFT"的尝试都只能靠块级落盘时间戳
+ * 反推，实测会把分母压缩 2-4 倍；宁可揭示含等待的真实吞吐，也不给虚高读数。
  *
  * @param metrics SpeedMetrics containing timing and token data
- * @returns Output tokens per second, or null if generation duration is zero
+ * @returns Output tokens per second, or null if the time span is zero
  */
 export function calculateOutputSpeed(metrics: SpeedMetrics): number | null {
     if (metrics.generationDurationMs === 0) {
@@ -18,30 +19,12 @@ export function calculateOutputSpeed(metrics: SpeedMetrics): number | null {
 }
 
 /**
- * Calculates input processing (prefill) throughput from speed metrics.
- *
- * 输入处理耗时约等于 TTFT（首 token 到达前服务端要过完整段输入），因此
- * 吞吐 = 真实 prefill 计算量 ÷ TTFT 总量；只统计有 TTFT 样本的请求。
- * 分子只含未缓存输入与缓存写入（cache creation），不含缓存命中（cache read）：
- * 后者直接读 KV cache、不经过前向计算，计入会把读数抬高一个数量级。
- * TTFT 仍含服务端排队与网络往返，故该值是真实 prefill 速度的下界。
- *
- * @param metrics SpeedMetrics containing timing and token data
- * @returns Input tokens per second, or null if no TTFT samples exist
- */
-export function calculateInputSpeed(metrics: SpeedMetrics): number | null {
-    if (metrics.ttftMsSum === 0) {
-        return null;
-    }
-    const seconds = metrics.ttftMsSum / 1000;
-    return metrics.ttftInputTokens / seconds;
-}
-
-/**
  * Calculates total tokens per second from speed metrics.
  *
+ * 与输出速度同分母，分子换成输入+输出，保证两个组件可直接对比。
+ *
  * @param metrics SpeedMetrics containing timing and token data
- * @returns Total tokens per second, or null if generation duration is zero
+ * @returns Total tokens per second, or null if the time span is zero
  */
 export function calculateTotalSpeed(metrics: SpeedMetrics): number | null {
     if (metrics.generationDurationMs === 0) {
@@ -49,19 +32,6 @@ export function calculateTotalSpeed(metrics: SpeedMetrics): number | null {
     }
     const seconds = metrics.generationDurationMs / 1000;
     return metrics.totalTokens / seconds;
-}
-
-/**
- * Calculates the average time to first token (TTFT) in milliseconds.
- *
- * @param metrics SpeedMetrics containing TTFT samples
- * @returns Average TTFT in milliseconds, or null if no samples exist
- */
-export function calculateTtftMs(metrics: SpeedMetrics): number | null {
-    if (metrics.ttftSampleCount === 0) {
-        return null;
-    }
-    return metrics.ttftMsSum / metrics.ttftSampleCount;
 }
 
 /**
@@ -81,22 +51,4 @@ export function formatSpeed(tokensPerSec: number | null): string {
     }
 
     return `${tokensPerSec.toFixed(1)} t/s`;
-}
-
-/**
- * Formats a TTFT value for display.
- *
- * @param ttftMs TTFT in milliseconds, or null if unavailable
- * @returns Formatted string (e.g., "850ms", "1.6s", or "—" for null)
- */
-export function formatTtft(ttftMs: number | null): string {
-    if (ttftMs === null) {
-        return '—';
-    }
-
-    if (ttftMs >= 1000) {
-        return `${(ttftMs / 1000).toFixed(1)}s`;
-    }
-
-    return `${Math.round(ttftMs)}ms`;
 }

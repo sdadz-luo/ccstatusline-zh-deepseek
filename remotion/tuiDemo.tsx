@@ -378,7 +378,6 @@ const WIDGET_CATALOG: WidgetCatalogItem[] = [
     makeCatalogItem('tokens-output', '输出 Token', '显示当前会话的输出 Token 数', 'Token'),
     makeCatalogItem('tokens-cached', '缓存 Token', '显示当前会话的缓存 Token 数', 'Token'),
     makeCatalogItem('tokens-total', '总 Token', '显示当前会话的总 Token 数（输入 + 输出 + 缓存）', 'Token'),
-    makeCatalogItem('input-speed', '输入速度', '显示会话平均输入 Token 速度（tokens/sec）', 'Token 速度'),
     makeCatalogItem('output-speed', '输出速度', '显示会话平均输出 Token 速度（tokens/sec）', 'Token 速度'),
     makeCatalogItem('total-speed', '总速度', '显示会话平均总 Token 速度（tokens/sec）', 'Token 速度'),
     makeCatalogItem('context-length', '上下文长度', '显示当前上下文窗口大小（Token 数）', '上下文'),

@@ -11,8 +11,6 @@ export interface TranscriptLine {
     timestamp?: string;
     isApiErrorMessage?: boolean;
     type?: 'user' | 'assistant' | 'system' | 'progress' | 'file-history-snapshot';
-    // 思考块落盘时 CLI 附带的该段思考时长（毫秒）；用于从首块时间戳反推 TTFT
-    thinkingDurationMs?: number;
 }
 
 // Peak/off-peak split of a token tally. DeepSeek bills by time of day, so tokens

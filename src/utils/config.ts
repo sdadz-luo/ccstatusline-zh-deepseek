@@ -15,7 +15,10 @@ import {
     needsMigration
 } from './migrations';
 import { getPackageVersion } from './terminal';
-import { upgradeLegacyWidgetTypes } from './widgets';
+import {
+    dropRemovedWidgetTypes,
+    upgradeLegacyWidgetTypes
+} from './widgets';
 
 // Use fs.promises directly (always available in modern Node.js)
 const readFile = fs.promises.readFile;
@@ -220,7 +223,7 @@ export async function loadSettings(): Promise<Settings> {
 
         return {
             ...result.data,
-            lines: upgradeLegacyWidgetTypes(result.data.lines)
+            lines: dropRemovedWidgetTypes(upgradeLegacyWidgetTypes(result.data.lines))
         };
     } catch (error) {
         console.error('Error loading settings, using defaults:', error);

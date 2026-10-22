@@ -10,10 +10,8 @@ import type {
     WidgetItem
 } from '../../types';
 import { DEFAULT_SETTINGS } from '../../types/Settings';
-import { InputSpeedWidget } from '../InputSpeed';
 import { OutputSpeedWidget } from '../OutputSpeed';
 import { TotalSpeedWidget } from '../TotalSpeed';
-import { TtftSpeedWidget } from '../TtftSpeed';
 
 function createSpeedMetrics(overrides: Partial<SpeedMetrics> = {}): SpeedMetrics {
     return {
@@ -22,9 +20,6 @@ function createSpeedMetrics(overrides: Partial<SpeedMetrics> = {}): SpeedMetrics
         outputTokens: 500,
         totalTokens: 1500,
         requestCount: 5,
-        ttftMsSum: 0,
-        ttftSampleCount: 0,
-        ttftInputTokens: 0,
         ...overrides
     };
 }
@@ -90,39 +85,6 @@ describe('OutputSpeedWidget', () => {
     });
 });
 
-describe('InputSpeedWidget', () => {
-    const widget = new InputSpeedWidget();
-
-    it('should report Token Speed category', () => {
-        expect(widget.getCategory()).toBe('Token 速度');
-    });
-
-    it('should show configured window modifier in editor display', () => {
-        const item = createItem('input-speed', { metadata: { windowSeconds: '75' } });
-        expect(widget.getEditorDisplay(item).modifierText).toBe('(75秒窗口)');
-    });
-
-    it('should render session preview by default and raw variant', () => {
-        const context: RenderContext = { isPreview: true };
-        expect(widget.render(createItem('input-speed'), context, DEFAULT_SETTINGS)).toBe('输入: 27.5k t/s');
-        expect(widget.render(createItem('input-speed', { rawValue: true }), context, DEFAULT_SETTINGS)).toBe('27.5k t/s');
-    });
-
-    it('should use windowed speed metrics for render output when configured', () => {
-        const context: RenderContext = { windowedSpeedMetrics: { 45: createSpeedMetrics({ ttftInputTokens: 450, ttftMsSum: 3000, ttftSampleCount: 1 }) } };
-        const item = createItem('input-speed', { metadata: { windowSeconds: '45' } });
-
-        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('输入: 150.0 t/s');
-    });
-
-    it('should treat 0 as disabled window and use session metrics', () => {
-        const context: RenderContext = { speedMetrics: createSpeedMetrics({ ttftInputTokens: 200, ttftMsSum: 2000, ttftSampleCount: 1 }) };
-        const item = createItem('input-speed', { metadata: { windowSeconds: '0' } });
-
-        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('输入: 100.0 t/s');
-    });
-});
-
 describe('TotalSpeedWidget', () => {
     const widget = new TotalSpeedWidget();
 
@@ -153,36 +115,5 @@ describe('TotalSpeedWidget', () => {
         const item = createItem('total-speed', { metadata: { windowSeconds: '15' } });
 
         expect(widget.render(item, context, DEFAULT_SETTINGS)).toBeNull();
-    });
-});
-
-describe('TtftSpeedWidget', () => {
-    const widget = new TtftSpeedWidget();
-
-    it('should report Token Speed category', () => {
-        expect(widget.getCategory()).toBe('Token 速度');
-    });
-
-    it('should render preview values', () => {
-        const context: RenderContext = { isPreview: true };
-        expect(widget.render(createItem('ttft'), context, DEFAULT_SETTINGS)).toBe('TTFT: 1.6s');
-        expect(widget.render(createItem('ttft', { rawValue: true }), context, DEFAULT_SETTINGS)).toBe('1.6s');
-    });
-
-    it('should render the average TTFT from TTFT samples', () => {
-        const context: RenderContext = { speedMetrics: createSpeedMetrics({ ttftMsSum: 3200, ttftSampleCount: 2 }) };
-        expect(widget.render(createItem('ttft'), context, DEFAULT_SETTINGS)).toBe('TTFT: 1.6s');
-    });
-
-    it('should render an em dash when no TTFT samples exist', () => {
-        const context: RenderContext = { speedMetrics: createSpeedMetrics() };
-        expect(widget.render(createItem('ttft'), context, DEFAULT_SETTINGS)).toBe('TTFT: —');
-    });
-
-    it('should use windowed metrics when a window is configured', () => {
-        const context: RenderContext = { windowedSpeedMetrics: { 60: createSpeedMetrics({ ttftMsSum: 900, ttftSampleCount: 1 }) } };
-        const item = createItem('ttft', { metadata: { windowSeconds: '60' } });
-
-        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('TTFT: 900ms');
     });
 });

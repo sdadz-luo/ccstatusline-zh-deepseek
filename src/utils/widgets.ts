@@ -24,6 +24,10 @@ const layoutWidgetTypes = new Set<WidgetItemType>(LAYOUT_WIDGET_MANIFEST.map(ent
 
 export const LEGACY_WIDGET_TYPE_ALIASES: Record<string, WidgetItemType> = { 'git-pr': 'git-review' };
 
+// 已下线组件：输入速度与 TTFT 依赖 transcript 不具备的首 token 时刻，保留只会产出
+// — 或虚高的读数。旧配置里的条目在加载时剔除，避免 TUI 显示无法编辑的死项。
+export const REMOVED_WIDGET_TYPES: ReadonlySet<WidgetItemType> = new Set(['input-speed', 'ttft']);
+
 export function resolveLegacyWidgetType(type: WidgetItemType): WidgetItemType {
     return LEGACY_WIDGET_TYPE_ALIASES[type] ?? type;
 }
@@ -33,6 +37,10 @@ export function upgradeLegacyWidgetTypes(lines: WidgetItem[][]): WidgetItem[][] 
         const resolved = resolveLegacyWidgetType(item.type);
         return resolved === item.type ? item : { ...item, type: resolved };
     }));
+}
+
+export function dropRemovedWidgetTypes(lines: WidgetItem[][]): WidgetItem[][] {
+    return lines.map(line => line.filter(item => !REMOVED_WIDGET_TYPES.has(item.type)));
 }
 
 export function getWidget(type: WidgetItemType): Widget | null {
