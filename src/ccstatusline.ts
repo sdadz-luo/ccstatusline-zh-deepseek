@@ -115,6 +115,9 @@ async function renderMultipleLines(data: StatusJSON) {
 
     // Check if session clock is needed
     const hasSessionClock = lines.some(line => line.some(item => item.type === 'session-clock'));
+    // Subagent tokens are only folded into the session cost widget; skip the
+    // subagent transcript scan when it is not configured.
+    const hasSessionCostWidget = lines.some(line => line.some(item => item.type === 'session-cost'));
 
     const speedWidgetTypes = new Set(['output-speed', 'total-speed']);
     const hasSpeedItems = lines.some(line => line.some(item => speedWidgetTypes.has(item.type)));
@@ -131,7 +134,9 @@ async function renderMultipleLines(data: StatusJSON) {
     let subagentTokenMetrics: TokenMetrics | null = null;
     if (data.transcript_path) {
         tokenMetrics = await getTokenMetrics(data.transcript_path);
-        subagentTokenMetrics = await getSubagentTokenMetrics(data.transcript_path);
+        if (hasSessionCostWidget) {
+            subagentTokenMetrics = await getSubagentTokenMetrics(data.transcript_path);
+        }
     }
 
     let sessionDuration: string | null = null;

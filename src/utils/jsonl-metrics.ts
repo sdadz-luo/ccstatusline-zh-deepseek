@@ -80,6 +80,12 @@ function getReferencedSubagentIds(lines: string[]): Set<string> {
     const agentIds = new Set<string>();
 
     for (const line of lines) {
+        // Only a handful of lines reference an agent; parsing just those keeps
+        // this scan cheap on large transcripts.
+        if (!line.includes('agentId')) {
+            continue;
+        }
+
         const data = parseJsonlLine(line);
         if (!data) {
             continue;
@@ -265,15 +271,14 @@ export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetr
 
             // Track the most recent entry with isSidechain: false (or undefined, which defaults to main chain)
             // Also skip API error messages (synthetic messages with 0 tokens)
-            if (data.isSidechain !== true && data.timestamp && !data.isApiErrorMessage) {
-                const entryTime = new Date(data.timestamp);
-                if (!mostRecentTimestamp || entryTime > mostRecentTimestamp) {
-                    mostRecentTimestamp = entryTime;
+            if (data.isSidechain !== true && entryTimestamp && !data.isApiErrorMessage) {
+                if (!mostRecentTimestamp || entryTimestamp > mostRecentTimestamp) {
+                    mostRecentTimestamp = entryTimestamp;
                     mostRecentMainChainEntry = data;
                 }
                 if (lineIndex > lastCompactBoundaryLineIndex
-                    && (!mostRecentPostCompactionTimestamp || entryTime > mostRecentPostCompactionTimestamp)) {
-                    mostRecentPostCompactionTimestamp = entryTime;
+                    && (!mostRecentPostCompactionTimestamp || entryTimestamp > mostRecentPostCompactionTimestamp)) {
+                    mostRecentPostCompactionTimestamp = entryTimestamp;
                     mostRecentPostCompactionEntry = data;
                 }
             }
@@ -702,6 +707,17 @@ function getSubagentTranscriptPaths(transcriptPath: string, referencedAgentIds: 
     return matchedPaths;
 }
 
+function accumulateBreakdown(target: TokenBreakdown, source: Partial<TokenBreakdown> | null | undefined): void {
+    if (!source) {
+        return;
+    }
+
+    target.inputTokens += source.inputTokens ?? 0;
+    target.outputTokens += source.outputTokens ?? 0;
+    target.cacheReadTokens += source.cacheReadTokens ?? 0;
+    target.cacheCreationTokens += source.cacheCreationTokens ?? 0;
+}
+
 // 汇总本次会话所有直接子代理（Task 工具派生的 agent）的 token 用量。
 // 子代理 transcript 与主 transcript 同构，复用 getTokenMetrics 的解析/去重/分桶逻辑。
 export async function getSubagentTokenMetrics(transcriptPath: string): Promise<TokenMetrics | null> {
@@ -734,19 +750,8 @@ export async function getSubagentTokenMetrics(transcriptPath: string): Promise<T
         cacheReadTokens += metrics.cacheReadTokens ?? 0;
         cacheCreationTokens += metrics.cacheCreationTokens ?? 0;
 
-        if (metrics.peakBreakdown) {
-            peak.inputTokens += metrics.peakBreakdown.inputTokens;
-            peak.outputTokens += metrics.peakBreakdown.outputTokens;
-            peak.cacheReadTokens += metrics.peakBreakdown.cacheReadTokens;
-            peak.cacheCreationTokens += metrics.peakBreakdown.cacheCreationTokens;
-        }
-
-        if (metrics.offPeakBreakdown) {
-            offPeak.inputTokens += metrics.offPeakBreakdown.inputTokens;
-            offPeak.outputTokens += metrics.offPeakBreakdown.outputTokens;
-            offPeak.cacheReadTokens += metrics.offPeakBreakdown.cacheReadTokens;
-            offPeak.cacheCreationTokens += metrics.offPeakBreakdown.cacheCreationTokens;
-        }
+        accumulateBreakdown(peak, metrics.peakBreakdown);
+        accumulateBreakdown(offPeak, metrics.offPeakBreakdown);
     }
 
     return {

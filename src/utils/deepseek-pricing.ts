@@ -50,21 +50,32 @@ function mergeRates(value: unknown, fallback: DeepSeekRates): DeepSeekRates {
  * 覆盖内置默认值（可只写要改的字段），免得每次调价都要改源码重新构建。
  * 文件缺失或格式错误时静默回退到默认值。
  */
+// The status line is a short-lived process, so the price file only needs to be
+// read once per run; edits take effect on the next refresh.
+let cachedPricing: DeepSeekPricing | null = null;
+
 export function getDeepSeekPricing(): DeepSeekPricing {
+    if (cachedPricing) {
+        return cachedPricing;
+    }
+
     try {
         const raw: unknown = JSON.parse(fs.readFileSync(PRICING_PATH, 'utf8'));
         if (!raw || typeof raw !== 'object') {
-            return DEFAULT_PRICING;
+            cachedPricing = DEFAULT_PRICING;
+            return cachedPricing;
         }
 
         const parsed = raw as Record<string, unknown>;
 
-        return {
+        cachedPricing = {
             peak: mergeRates(parsed.peak, DEFAULT_PRICING.peak),
             offPeak: mergeRates(parsed.offPeak, DEFAULT_PRICING.offPeak)
         };
+        return cachedPricing;
     } catch {
-        return DEFAULT_PRICING;
+        cachedPricing = DEFAULT_PRICING;
+        return cachedPricing;
     }
 }
 

@@ -386,7 +386,16 @@ describe('config utilities', () => {
             JSON.stringify({ version: CURRENT_VERSION, lines: [[], [], []], flexMode: 'full' }),
             'utf-8'
         );
-        fs.symlinkSync(targetPath, settingsPath);
+        try {
+            fs.symlinkSync(targetPath, settingsPath);
+        } catch (error) {
+            // Windows without SeCreateSymbolicLinkPrivilege (developer mode off)
+            // cannot create symlinks; POSIX CI covers the behavior.
+            if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+                return;
+            }
+            throw error;
+        }
 
         await saveSettings({
             ...DEFAULT_SETTINGS,
