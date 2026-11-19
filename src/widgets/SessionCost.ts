@@ -70,8 +70,19 @@ function calculateDeepSeekCost(context: RenderContext): number | null {
         + costForBreakdown(mergeBreakdowns(offPeak, sub?.offPeakBreakdown), pricing.offPeak);
 }
 
+// 默认色策略：波峰时段翻倍计价只存在于 DeepSeek 的计费口径，变红提醒也只对
+// DeepSeek 模型有意义；其他模型（含官方 cost 上报路径）与北京时段无关，恒为绿色。
+// 抽成纯函数以便测试注入固定时间，避免用例对运行时钟敏感。
+export function peakAwareDefaultColor(context: RenderContext | undefined, now: Date): string {
+    if (!context || !isDeepSeekFlash(context)) {
+        return 'green';
+    }
+
+    return isDeepSeekPeakHour(now) ? 'red' : 'green';
+}
+
 export class SessionCostWidget implements Widget {
-    getDefaultColor(): string { return isDeepSeekPeakHour(new Date()) ? 'red' : 'green'; }
+    getDefaultColor(context?: RenderContext): string { return peakAwareDefaultColor(context, new Date()); }
     getDescription(): string { return '显示当前会话总费用（美元）'; }
     getDisplayName(): string { return '会话费用'; }
     getCategory(): string { return '会话'; }

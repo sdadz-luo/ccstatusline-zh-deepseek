@@ -255,7 +255,7 @@ function renderPowerlineStatusLine(
             widgetText = preRendered.content;
             // Get default color from widget impl for consistency
             if (widgetImpl) {
-                defaultColor = widgetImpl.getDefaultColor();
+                defaultColor = widgetImpl.getDefaultColor(context);
             }
         }
 
@@ -1061,7 +1061,7 @@ export function renderStatusLine(
                     let widgetColor = prevWidget.color;
                     if (!widgetColor) {
                         const widgetImpl = getWidget(prevWidget.type);
-                        widgetColor = widgetImpl ? widgetImpl.getDefaultColor() : 'white';
+                        widgetColor = widgetImpl ? widgetImpl.getDefaultColor(context) : 'white';
                     }
                     separatorColor = widgetColor;
                     separatorBg = prevWidget.backgroundColor;
@@ -1092,7 +1092,7 @@ export function renderStatusLine(
                 // Get default color from widget impl for consistency
                 const widgetImpl = getWidget(widget.type);
                 if (widgetImpl) {
-                    defaultColor = widgetImpl.getDefaultColor();
+                    defaultColor = widgetImpl.getDefaultColor(context);
                 }
             }
 
@@ -1156,7 +1156,7 @@ export function renderStatusLine(
                     let widgetColor = prevElem.widget.color;
                     if (!widgetColor && prevElem.widget.type !== 'separator' && prevElem.widget.type !== 'flex-separator') {
                         const widgetImpl = getWidget(prevElem.widget.type);
-                        widgetColor = widgetImpl ? widgetImpl.getDefaultColor() : 'white';
+                        widgetColor = widgetImpl ? widgetImpl.getDefaultColor(context) : 'white';
                     }
                     const coloredSep = applyColorsWithOverride(defaultSep, widgetColor, prevElem.widget.backgroundColor, prevElem.widget.bold, prevElem.widget.dim);
                     finalElements.push(coloredSep);

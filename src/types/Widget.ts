@@ -35,7 +35,9 @@ export interface WidgetEditorDisplay {
 }
 
 export interface Widget {
-    getDefaultColor(): string;
+    // context 可选：renderer 渲染时传入（widget 可依模型等上下文决定默认色），
+    // TUI 配置界面与颜色降级等无模型信息的调用点不传，实现需自行回退到安全默认色。
+    getDefaultColor(context?: RenderContext): string;
     getDescription(): string;
     getDisplayName(): string;
     getCategory(): string;
