@@ -134,7 +134,7 @@ sirmalloc/ccstatusline            英文原版
 
 文件缺失或格式不合规时静默回退到内置默认值。
 
-> 已知限制：法定节假日未做识别，仅按周末跳过，节假日落在工作日时会按波峰价计算；默认颜色同样在波峰时段全局生效，不限于 DeepSeek 模型。
+> 已知限制：法定节假日未做识别，仅按周末跳过，节假日落在工作日时会按波峰价计算。波峰变红只对 DeepSeek 模型生效，其他模型（含官方 cost 上报路径）默认恒为绿色。
 
 ### 代理 token 去重
 
@@ -165,7 +165,7 @@ Task 工具派生的子代理，其记录位于 `subagents/` 目录下，不在�
 
 本 Fork 增加了一条数据源：当 `ANTHROPIC_BASE_URL` 指向 `opencode.ai` 时，改打 opencode 自己的用量接口。
 
-- **接口**：`GET https://opencode.ai/zen/go/v1/usage`，`Authorization: Bearer <key>`，返回 `usage.{rolling,weekly,monthly}`，每项含 `status`、`percent`、`resetsAt`。
+- **接口**：`GET https://opencode.ai/inference/go/v1/usage`，`Authorization: Bearer <key>`，返回 `usage.{rolling,weekly,monthly}`，每项含 `status`、`percent`、`resetsAt`（2026-11-19 实测与旧前缀 `/zen/go/v1/usage` 数据同构；官方文档现只提新前缀，本仓库打新前缀防旧前缀静默退役）。
 - **窗口映射**：`rolling` → 会话用量（5 小时）、`weekly` → 周用量、`monthly` → 月用量（本 Fork 新增的组件）。重置计时组件随之改用接口给出的重置时刻，不再依赖本地 transcript 推算。
 - **`percent` 是「已用」百分比**：opencode 的额度按模型折算成美元、分三个滚动窗口（5 小时 = 月额度 20%、周 = 50%、月 = 100%，见 [opencode go 文档](https://opencode.ai/docs/go/)）。按 opencode 内的记账价目换算本地 transcript 消耗后，滚动与周两个窗口各自反解出的月额度互相吻合（$128.7 与 $125.2）；若按「剩余」解释则解得 $6.77 与 $3.87，自相矛盾。
 - **凭据解析顺序**：`ANTHROPIC_API_KEY`（Claude Code 当前调网关用的 key）→ `OPENCODE_API_KEY` → settings.json 的 env 段 → `~/.local/share/opencode/auth.json` 的 `opencode` 条目。状态栏由 Claude Code 派生，`ANTHROPIC_API_KEY` 必然可用，故排在最前；`OPENCODE_API_KEY` 可能是别处留下的旧 key（实测有一把被服务端判为 `api_key_expired`），只在缺少前者时才用。auth.json 的 `opencode-go` 条目不直接读取——Claude Code 环境变量里的 key 通常就来自它。
