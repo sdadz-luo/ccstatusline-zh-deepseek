@@ -77,12 +77,22 @@ The project has dual runtime compatibility - works with both Bun and Node.js:
   - Sonnet 4.5 WITHOUT [1m] suffix: 200k tokens (160k usable at 80%)
   - Legacy models: 200k tokens (160k usable at 80%)
 
+### Fork-specific modules (this repository)
+Additions over upstream powering the DeepSeek / opencode adaptations:
+- **deepseek-pricing.ts**: DeepSeek peak/off-peak rates plus Beijing-time window check (`isDeepSeekPeakHour`); rates overridable via `deepseek-pricing.json` next to settings.json without rebuilding
+- **jsonl-metrics.ts**: transcript token aggregation — dedupes rows by `message.id` (proxies split one call into multiple usage rows), buckets tokens into peak/off-peak by row timestamp, sums subagent transcripts, computes TTFT-aware speed metrics
+- **opencode-usage.ts**: opencode go usage endpoint (`/inference/go/v1/usage`) — credential resolution and rolling/weekly/monthly window mapping
+- **usage-fetch.ts / usage-prefetch.ts**: usage source dispatch (Claude OAuth vs opencode) with per-source cache isolation
+- **speed-metrics.ts / speed-window.ts**: output-speed statistics (session average and rolling windows)
+- Fork-added widgets: OutputSpeed, TotalSpeed, MonthlyUsage. InputSpeed and TTFT widgets are removed; stale entries are dropped from settings on load
+- SessionCost behaviour: time-of-use pricing (and the peak-hour red default color) activates only when the model id contains `deepseek` + `flash`; other models fall back to `cost.total_cost_usd` and stay green
+
 ### Widgets (src/widgets/)
 Custom widgets implementing the Widget interface defined in src/types/Widget.ts:
 
 **Widget Interface:**
 All widgets must implement:
-- `getDefaultColor()`: Default color for the widget
+- `getDefaultColor(context?)`: Default color for the widget; the renderer passes the RenderContext (widgets may vary it by model), TUI/config callers omit it
 - `getDescription()`: Description shown in TUI
 - `getDisplayName()`: Display name shown in TUI
 - `getEditorDisplay()`: How the widget appears in the editor
