@@ -1,4 +1,7 @@
-import * as childProcess from 'child_process';
+import * as childProcess from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
     afterEach,
     describe,
@@ -9,6 +12,7 @@ import {
 
 import {
     getCommandResolutionPaths,
+    getRealDirectory,
     inspectGlobalCommandResolution
 } from '../global-command-resolution';
 import {
@@ -16,7 +20,7 @@ import {
     getPackageManagerShellOptions
 } from '../package-manager-executable';
 
-function mockExecFileSync(responses: Record<string, string>) {
+function mockExecFileSync(responses: Record<string, string | Error>) {
     const spy = vi.spyOn(childProcess, 'execFileSync').mockImplementation((command, args) => {
         const key = `${command} ${(args as string[]).join(' ')}`;
         const response = responses[key];
@@ -25,13 +29,41 @@ function mockExecFileSync(responses: Record<string, string>) {
             throw new Error(`Unexpected command: ${key}`);
         }
 
+        if (response instanceof Error) {
+            throw response;
+        }
+
         return response;
     });
-    // Bun shares module mocks across test files; clear calls recorded by other
-    // suites so assertions only see probes made by this test.
+
+    // Other suites replace child_process wholesale via vi.mock, which is not
+    // file-scoped under the bun runner. When one of those runs first, vi.spyOn
+    // hands back that already-installed mock along with its accumulated call
+    // history, so assertions here would otherwise inspect foreign calls.
     spy.mockClear();
 
     return spy;
+}
+
+// What running a program that isn't installed throws
+function missingProgramError(command: string): Error {
+    return Object.assign(new Error(`spawnSync ${command} ENOENT`), { code: 'ENOENT' });
+}
+
+// What a program that runs and exits with status 1 throws, as `which` does when it finds nothing
+function failedCommandError(command: string): Error {
+    return Object.assign(new Error(`Command failed: ${command}`), { status: 1 });
+}
+
+// macOS and Windows file systems ignore letter case by default; most Linux ones don't
+function tempFileSystemIgnoresCase(): boolean {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-case-'));
+    try {
+        fs.mkdirSync(path.join(dir, 'probe'));
+        return fs.existsSync(path.join(dir, 'PROBE'));
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 describe('global command resolution', () => {
@@ -76,6 +108,43 @@ describe('global command resolution', () => {
         ]);
     });
 
+    // Minimal Linux images (Fedora, UBI, Arch without the which package) have no `which`
+    it.skipIf(process.platform === 'win32')('looks through PATH itself when there is no which command', () => {
+        const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-path-'));
+        const originalPath = process.env.PATH;
+        try {
+            fs.writeFileSync(path.join(binDir, 'ccstatusline-zh'), '#!/bin/sh\n', { mode: 0o755 });
+            process.env.PATH = `${path.join(binDir, 'missing')}:${binDir}`;
+            mockExecFileSync({
+                'which -a ccstatusline-zh': missingProgramError('which'),
+                'bun pm bin -g': `${binDir}\n`
+            });
+
+            const resolution = inspectGlobalCommandResolution('bun', { platform: 'linux' });
+
+            expect(resolution.resolvedPaths).toEqual([path.join(binDir, 'ccstatusline-zh')]);
+            expect(resolution.warning).toBeNull();
+        } finally {
+            process.env.PATH = originalPath;
+            fs.rmSync(binDir, { recursive: true, force: true });
+        }
+    });
+
+    it.skipIf(process.platform === 'win32')('does not look through PATH itself when which runs and fails', () => {
+        const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-path-'));
+        const originalPath = process.env.PATH;
+        try {
+            fs.writeFileSync(path.join(binDir, 'ccstatusline-zh'), '#!/bin/sh\n', { mode: 0o755 });
+            process.env.PATH = binDir;
+            mockExecFileSync({ 'which -a ccstatusline-zh': failedCommandError('which -a ccstatusline-zh') });
+
+            expect(getCommandResolutionPaths('ccstatusline-zh', { platform: 'linux' })).toEqual([]);
+        } finally {
+            process.env.PATH = originalPath;
+            fs.rmSync(binDir, { recursive: true, force: true });
+        }
+    });
+
     it('silences child stderr on best-effort probes so failures cannot leak to the terminal', () => {
         const execFileSyncSpy = mockExecFileSync({
             'which -a ccstatusline-zh': '/home/alice/.bun/bin/ccstatusline-zh\n',
@@ -87,7 +156,7 @@ describe('global command resolution', () => {
         expect(execFileSyncSpy).toHaveBeenCalled();
         for (const call of execFileSyncSpy.mock.calls) {
             const options = call[2] as { stdio?: string[] };
-            expect(options.stdio).toEqual(['ignore', 'pipe', 'ignore']);
+            expect(options.stdio?.[2]).toBe('ignore');
         }
     });
 
@@ -102,7 +171,7 @@ describe('global command resolution', () => {
         expect(resolution.expectedBinDir).toBeNull();
     });
 
-    it('warns when multiple PATH directories contain ccstatusline', () => {
+    it('warns when multiple PATH directories contain ccstatusline-zh', () => {
         mockExecFileSync({
             'which -a ccstatusline-zh': '/home/alice/.bun/bin/ccstatusline-zh\n/usr/local/bin/ccstatusline-zh\n',
             'bun pm bin -g': '/home/alice/.bun/bin\n'
@@ -115,6 +184,75 @@ describe('global command resolution', () => {
         expect(resolution.warning).toContain('/usr/local/bin/ccstatusline-zh');
     });
 
+    // Merged /usr (Ubuntu 22.04+, Debian 12): /bin links to usr/bin and PATH lists both
+    it.skipIf(process.platform === 'win32')('counts a PATH directory reached through a symlink once', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-merged-usr-'));
+        try {
+            fs.mkdirSync(path.join(root, 'usr', 'bin'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'usr', 'bin', 'ccstatusline-zh'), '#!/bin/sh\n', { mode: 0o755 });
+            fs.symlinkSync('usr/bin', path.join(root, 'bin'));
+            mockExecFileSync({
+                'which -a ccstatusline-zh': `${root}/usr/bin/ccstatusline-zh\n${root}/bin/ccstatusline-zh\n`,
+                'npm prefix -g': `${root}/usr\n`
+            });
+
+            const resolution = inspectGlobalCommandResolution('npm', { platform: 'linux' });
+
+            expect(resolution.resolvedPaths).toEqual([`${root}/usr/bin/ccstatusline-zh`, `${root}/bin/ccstatusline-zh`]);
+            expect(resolution.warning).toBeNull();
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it.skipIf(process.platform === 'win32')('lists another install once and leaves out other spellings of the first match', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-merged-usr-'));
+        try {
+            fs.mkdirSync(path.join(root, 'usr', 'bin'), { recursive: true });
+            fs.mkdirSync(path.join(root, '.bun', 'bin'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'usr', 'bin', 'ccstatusline-zh'), '#!/bin/sh\n', { mode: 0o755 });
+            fs.writeFileSync(path.join(root, '.bun', 'bin', 'ccstatusline-zh'), '#!/bin/sh\n', { mode: 0o755 });
+            fs.symlinkSync('usr/bin', path.join(root, 'bin'));
+            mockExecFileSync({
+                'which -a ccstatusline-zh': `${root}/usr/bin/ccstatusline-zh\n${root}/bin/ccstatusline-zh\n${root}/.bun/bin/ccstatusline-zh\n`,
+                'npm prefix -g': `${root}/usr\n`
+            });
+
+            const resolution = inspectGlobalCommandResolution('npm', { platform: 'linux' });
+
+            expect(resolution.warning).toBe(`⚠ PATH 中存在多个 ccstatusline-zh 可执行文件，Claude Code 将使用第一个匹配：${root}/usr/bin/ccstatusline-zh。\n其他匹配：${root}/.bun/bin/ccstatusline-zh`);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    // Where letter case is ignored, PATH can spell one directory two ways
+    it.skipIf(!tempFileSystemIgnoresCase())('resolves a directory spelled in another letter case to one path', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-case-'));
+        try {
+            fs.mkdirSync(path.join(root, 'bin'));
+
+            expect(getRealDirectory(path.join(root, 'Bin'))).toBe(getRealDirectory(path.join(root, 'bin')));
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    // Bun's plain realpathSync already reports the on-disk case, so only the
+    // call itself shows that Node gets the same answer
+    it('resolves directories with the native realpath', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccstatusline-case-'));
+        try {
+            const nativeSpy = vi.spyOn(fs.realpathSync, 'native');
+
+            getRealDirectory(root);
+
+            expect(nativeSpy).toHaveBeenCalledWith(root);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('ignores transient bunx status line shims when resolving global commands', () => {
         mockExecFileSync({
             'which -a ccstatusline-zh': '/var/folders/demo/T/bunx-501-ccstatusline-zh@latest/node_modules/.bin/ccstatusline-zh\n/Users/alice/.bun/bin/ccstatusline-zh\n',
@@ -125,6 +263,49 @@ describe('global command resolution', () => {
 
         expect(resolution.firstResolvedPath).toBe('/Users/alice/.bun/bin/ccstatusline-zh');
         expect(resolution.resolvedPaths).toEqual(['/Users/alice/.bun/bin/ccstatusline-zh']);
+        expect(resolution.warning).toBeNull();
+    });
+
+    it('ignores transient npx status line shims when resolving global commands', () => {
+        mockExecFileSync({
+            'which -a ccstatusline-zh': '/Users/alice/.npm/_npx/9f3c1e2a7b6d4c80/node_modules/.bin/ccstatusline-zh\n/Users/alice/.nvm/versions/node/v24.9.0/bin/ccstatusline-zh\n',
+            'npm prefix -g': '/Users/alice/.nvm/versions/node/v24.9.0\n'
+        });
+
+        const resolution = inspectGlobalCommandResolution('npm', { platform: 'darwin' });
+
+        expect(resolution.firstResolvedPath).toBe('/Users/alice/.nvm/versions/node/v24.9.0/bin/ccstatusline-zh');
+        expect(resolution.resolvedPaths).toEqual(['/Users/alice/.nvm/versions/node/v24.9.0/bin/ccstatusline-zh']);
+        expect(resolution.warning).toBeNull();
+    });
+
+    it('ignores npx shims from a custom npm cache directory', () => {
+        mockExecFileSync({
+            'which -a ccstatusline-zh': '/srv/cache/npm/_npx/0a1b2c3d4e5f6789/node_modules/.bin/ccstatusline-zh\n/usr/local/bin/ccstatusline-zh\n',
+            'npm prefix -g': '/usr/local\n'
+        });
+
+        const resolution = inspectGlobalCommandResolution('npm', { platform: 'linux' });
+
+        expect(resolution.resolvedPaths).toEqual(['/usr/local/bin/ccstatusline-zh']);
+        expect(resolution.warning).toBeNull();
+    });
+
+    it('ignores transient npx shims in the Windows npm cache', () => {
+        mockExecFileSync({
+            'where ccstatusline-zh': [
+                'C:\\Users\\Alice\\AppData\\Local\\npm-cache\\_npx\\9f3c1e2a7b6d4c80\\node_modules\\.bin\\ccstatusline-zh',
+                'C:\\Users\\Alice\\AppData\\Local\\npm-cache\\_npx\\9f3c1e2a7b6d4c80\\node_modules\\.bin\\ccstatusline-zh.cmd',
+                'C:\\Users\\Alice\\AppData\\Local\\npm-cache\\_npx\\9f3c1e2a7b6d4c80\\node_modules\\.bin\\ccstatusline-zh.ps1',
+                'C:\\Users\\Alice\\AppData\\Roaming\\npm\\ccstatusline-zh.cmd',
+                ''
+            ].join('\r\n'),
+            'npm.cmd prefix -g': 'C:\\Users\\Alice\\AppData\\Roaming\\npm\r\n'
+        });
+
+        const resolution = inspectGlobalCommandResolution('npm', { platform: 'win32' });
+
+        expect(resolution.resolvedPaths).toEqual(['C:\\Users\\Alice\\AppData\\Roaming\\npm\\ccstatusline-zh.cmd']);
         expect(resolution.warning).toBeNull();
     });
 
@@ -152,7 +333,7 @@ describe('global command resolution', () => {
         expect(resolution.warning).toContain('/usr/local/bin/ccstatusline-zh');
     });
 
-    it('warns when ccstatusline is not resolvable after a global install', () => {
+    it('warns when ccstatusline-zh is not resolvable after a global install', () => {
         mockExecFileSync({ 'npm prefix -g': '/usr/local\n' });
 
         const resolution = inspectGlobalCommandResolution('npm', { platform: 'linux' });

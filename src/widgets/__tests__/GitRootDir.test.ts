@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFileSync } from 'node:child_process';
 import {
     beforeEach,
     describe,
@@ -10,15 +10,17 @@ import {
 import type { RenderContext } from '../../types/RenderContext';
 import { DEFAULT_SETTINGS } from '../../types/Settings';
 import type { WidgetItem } from '../../types/Widget';
+import { mockExecutableResolution } from '../../utils/__tests__/executable-path-test-helpers';
 import { expectGitExecOptions } from '../../utils/__tests__/git-test-helpers';
 import { clearGitCache } from '../../utils/git';
+import { GIT_HARDENING_ARGS } from '../../utils/git-hardening';
 import {
     buildIdeFileUrl,
     renderOsc8Link
 } from '../../utils/hyperlink';
 import { GitRootDirWidget } from '../GitRootDir';
 
-vi.mock('child_process', () => ({
+vi.mock('node:child_process', () => ({
     execSync: vi.fn(),
     execFileSync: vi.fn(),
     spawnSync: vi.fn()
@@ -41,11 +43,13 @@ function render(options: { cwd?: string; hideNoGit?: boolean; isPreview?: boolea
         id: 'git-root-dir',
         type: 'git-root-dir',
         maxWidth: options.maxWidth,
-        metadata: options.hideNoGit ? { hideNoGit: 'true' } : undefined
+        metadata: options.hideNoGit ? { hide: 'no-git' } : undefined
     };
 
     return widget.render(item, context, DEFAULT_SETTINGS);
 }
+
+mockExecutableResolution();
 
 describe('GitRootDirWidget', () => {
     beforeEach(() => {
@@ -55,6 +59,11 @@ describe('GitRootDirWidget', () => {
 
     it('should render preview', () => {
         expect(render({ isPreview: true })).toBe('my-repo');
+    });
+
+    // A sample long enough for the limit to show, cut the way a real name is
+    it('should apply the max width to the preview', () => {
+        expect(render({ isPreview: true, maxWidth: 10 })).toBe('my-long...');
     });
 
     it('should render preview for vscode IDE links', () => {
@@ -76,10 +85,10 @@ describe('GitRootDirWidget', () => {
 
         expect(render({ cwd: '/tmp/worktree' })).toBe('my-repo');
         expect(mockExecFileSync.mock.calls[0]?.[0]).toBe('git');
-        expect(mockExecFileSync.mock.calls[0]?.[1]).toEqual(['rev-parse', '--is-inside-work-tree']);
+        expect(mockExecFileSync.mock.calls[0]?.[1]).toEqual([...GIT_HARDENING_ARGS, 'rev-parse', '--is-inside-work-tree']);
         expectGitExecOptions(mockExecFileSync.mock.calls[0]?.[2], '/tmp/worktree');
         expect(mockExecFileSync.mock.calls[1]?.[0]).toBe('git');
-        expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual(['rev-parse', '--show-toplevel']);
+        expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual([...GIT_HARDENING_ARGS, 'rev-parse', '--show-toplevel']);
         expectGitExecOptions(mockExecFileSync.mock.calls[1]?.[2], '/tmp/worktree');
     });
 
@@ -104,6 +113,20 @@ describe('GitRootDirWidget', () => {
         expect(render()).toBe('C:');
     });
 
+    it('should handle trailing windows separators', () => {
+        mockExecFileSync.mockReturnValueOnce('true\n');
+        mockExecFileSync.mockReturnValueOnce('C:\\Work\\my-repo\\/');
+
+        expect(render()).toBe('my-repo');
+    });
+
+    it('should render a path of only separators unchanged', () => {
+        mockExecFileSync.mockReturnValueOnce('true\n');
+        mockExecFileSync.mockReturnValueOnce('//');
+
+        expect(render()).toBe('//');
+    });
+
     it('should render encoded vscode IDE links for repository roots', () => {
         const widget = new GitRootDirWidget();
         mockExecFileSync.mockReturnValueOnce('true\n');
@@ -115,6 +138,21 @@ describe('GitRootDirWidget', () => {
             metadata: { linkToIDE: 'vscode' }
         }, {}, DEFAULT_SETTINGS)).toBe(renderOsc8Link(
             buildIdeFileUrl('C:/Work/my repo#1', 'vscode'),
+            'my repo#1'
+        ));
+    });
+
+    it('should render Zed IDE links for repository roots', () => {
+        const widget = new GitRootDirWidget();
+        mockExecFileSync.mockReturnValueOnce('true\n');
+        mockExecFileSync.mockReturnValueOnce('/Users/me/my repo#1');
+
+        expect(widget.render({
+            id: 'git-root-dir',
+            type: 'git-root-dir',
+            metadata: { linkToIDE: 'zed' }
+        }, {}, DEFAULT_SETTINGS)).toBe(renderOsc8Link(
+            buildIdeFileUrl('/Users/me/my repo#1', 'zed'),
             'my repo#1'
         ));
     });
@@ -158,14 +196,16 @@ describe('GitRootDirWidget', () => {
 
         const vscode = widget.handleEditorAction('toggle-link', base);
         const cursor = widget.handleEditorAction('toggle-link', vscode ?? base);
-        const cleared = widget.handleEditorAction('toggle-link', cursor ?? base);
+        const zed = widget.handleEditorAction('toggle-link', cursor ?? base);
+        const cleared = widget.handleEditorAction('toggle-link', zed ?? base);
 
         expect(vscode?.metadata?.linkToIDE).toBe('vscode');
         expect(cursor?.metadata?.linkToIDE).toBe('cursor');
+        expect(zed?.metadata?.linkToIDE).toBe('zed');
         expect(cleared?.metadata?.linkToIDE).toBeUndefined();
     });
 
-    it('should migrate legacy cursor metadata when cycling IDE link modes', () => {
+    it('should migrate legacy cursor metadata to the next IDE link mode', () => {
         const widget = new GitRootDirWidget();
         const updated = widget.handleEditorAction('toggle-link', {
             id: 'git-root-dir',
@@ -174,7 +214,7 @@ describe('GitRootDirWidget', () => {
         });
 
         expect(updated?.metadata?.linkToCursor).toBeUndefined();
-        expect(updated?.metadata?.linkToIDE).toBeUndefined();
+        expect(updated?.metadata?.linkToIDE).toBe('zed');
     });
 
     it('should show IDE link modifier text in the editor display', () => {
@@ -186,6 +226,17 @@ describe('GitRootDirWidget', () => {
         });
 
         expect(display.modifierText).toBe('(link-cursor)');
+    });
+
+    it('should show the Zed IDE link modifier text in the editor display', () => {
+        const widget = new GitRootDirWidget();
+        const display = widget.getEditorDisplay({
+            id: 'git-root-dir',
+            type: 'git-root-dir',
+            metadata: { linkToIDE: 'zed' }
+        });
+
+        expect(display.modifierText).toBe('(link-zed)');
     });
 
     it('should expose IDE link keybind', () => {

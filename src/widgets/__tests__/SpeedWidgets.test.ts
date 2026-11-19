@@ -29,26 +29,28 @@ function createItem(
     options: {
         rawValue?: boolean;
         metadata?: Record<string, string>;
+        numberFormat?: WidgetItem['numberFormat'];
     } = {}
 ): WidgetItem {
     return {
         id: type,
         type,
         rawValue: options.rawValue,
-        metadata: options.metadata
+        metadata: options.metadata,
+        numberFormat: options.numberFormat
     };
 }
 
 describe('OutputSpeedWidget', () => {
     const widget = new OutputSpeedWidget();
 
-    it('should report Token Speed category', () => {
+    it('should report Token 速度 category', () => {
         expect(widget.getCategory()).toBe('Token 速度');
     });
 
     it('should describe session-average behavior and window override', () => {
         expect(widget.getDescription()).toContain('全会话平均');
-        expect(widget.getDescription()).toContain('0-120');
+        expect(widget.getDescription()).toContain('0-3600');
     });
 
     it('should expose a window editor keybind', () => {
@@ -64,6 +66,13 @@ describe('OutputSpeedWidget', () => {
     it('should render session preview value by default', () => {
         const context: RenderContext = { isPreview: true };
         expect(widget.render(createItem('output-speed'), context, DEFAULT_SETTINGS)).toBe('输出: 42.5 t/s');
+    });
+
+    it('should format the preview value with the selected speed style', () => {
+        const context: RenderContext = { isPreview: true };
+        const item = createItem('output-speed', { numberFormat: { style: 'whole' } });
+
+        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('输出: 43 t/s');
     });
 
     it('should render window preview when window metadata is enabled', () => {
@@ -83,18 +92,55 @@ describe('OutputSpeedWidget', () => {
 
         expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('输出: 120.0 t/s');
     });
+
+    it('should calculate output speed from a one-hour window', () => {
+        const context: RenderContext = { windowedSpeedMetrics: { 3600: createSpeedMetrics({ outputTokens: 9000, generationDurationMs: 300000 }) } };
+        const item = createItem('output-speed', { metadata: { windowSeconds: '3600' } });
+
+        expect(widget.getEditorDisplay(item).modifierText).toBe('(3600秒窗口)');
+        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('输出: 30.0 t/s');
+    });
+});
+
+describe('speed widget hideable states', () => {
+    it('should declare the no-data hideable state for all speed widgets', () => {
+        for (const widget of [new OutputSpeedWidget(), new TotalSpeedWidget()]) {
+            expect(widget.getHideableStates().map(state => state.key)).toEqual(['no-data']);
+        }
+    });
+
+    it('should render the em dash placeholder unless no-data hiding is enabled', () => {
+        const widget = new OutputSpeedWidget();
+        const context: RenderContext = { speedMetrics: createSpeedMetrics({ generationDurationMs: 0 }) };
+
+        expect(widget.render(createItem('output-speed'), context, DEFAULT_SETTINGS)).toBe('输出: —');
+        expect(widget.render(createItem('output-speed', { metadata: { hide: 'no-data' } }), context, DEFAULT_SETTINGS)).toBeNull();
+    });
+
+    it('applies number formatting without bypassing no-data hiding', () => {
+        const widget = new OutputSpeedWidget();
+        const numberFormat = { style: 'compact' as const };
+        const speedContext: RenderContext = { speedMetrics: createSpeedMetrics({ outputTokens: 500, generationDurationMs: 10000 }) };
+        const noDataContext: RenderContext = { speedMetrics: createSpeedMetrics({ generationDurationMs: 0 }) };
+
+        expect(widget.render(createItem('output-speed', { numberFormat }), speedContext, DEFAULT_SETTINGS)).toBe('输出: 50 t/s');
+        expect(widget.render(createItem('output-speed', {
+            metadata: { hide: 'no-data' },
+            numberFormat
+        }), noDataContext, DEFAULT_SETTINGS)).toBeNull();
+    });
 });
 
 describe('TotalSpeedWidget', () => {
     const widget = new TotalSpeedWidget();
 
-    it('should report Token Speed category', () => {
+    it('should report Token 速度 category', () => {
         expect(widget.getCategory()).toBe('Token 速度');
     });
 
     it('should clamp invalid editor metadata to supported range', () => {
-        const item = createItem('total-speed', { metadata: { windowSeconds: '999' } });
-        expect(widget.getEditorDisplay(item).modifierText).toBe('(120秒窗口)');
+        const item = createItem('total-speed', { metadata: { windowSeconds: '3601' } });
+        expect(widget.getEditorDisplay(item).modifierText).toBe('(3600秒窗口)');
     });
 
     it('should render preview values', () => {

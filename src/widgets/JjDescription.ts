@@ -1,61 +1,19 @@
 import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
-import type {
-    CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
-    WidgetItem
-} from '../types/Widget';
-import {
-    isInsideJjRepo,
-    runJjArgs
-} from '../utils/jj';
+import type { WidgetItem } from '../types/Widget';
+import { runJjArgs } from '../utils/jj';
 
-export class JjDescriptionWidget implements Widget {
+import { JjWidgetBase } from './shared/jj-widget-base';
+
+export class JjDescriptionWidget extends JjWidgetBase {
+    protected readonly previewValue = '(无描述)';
+    protected readonly noJjText = '无 JJ';
+
     getDefaultColor(): string { return 'white'; }
     getDescription(): string { return '显示当前 Jujutsu 变更描述'; }
     getDisplayName(): string { return 'JJ 变更描述'; }
-    getCategory(): string { return 'Jujutsu'; }
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        const hideNoJj = item.metadata?.hideNoJj === 'true';
-        const modifiers: string[] = [];
 
-        if (hideNoJj) {
-            modifiers.push('隐藏「无 JJ」');
-        }
-
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: modifiers.length > 0 ? `(${modifiers.join(', ')})` : undefined
-        };
-    }
-
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        if (action === 'toggle-nojj') {
-            const currentState = item.metadata?.hideNoJj === 'true';
-            return {
-                ...item,
-                metadata: {
-                    ...item.metadata,
-                    hideNoJj: (!currentState).toString()
-                }
-            };
-        }
-        return null;
-    }
-
-    render(item: WidgetItem, context: RenderContext, _settings: Settings): string | null {
-        const hideNoJj = item.metadata?.hideNoJj === 'true';
-
-        if (context.isPreview) {
-            return '(无描述)';
-        }
-
-        if (!isInsideJjRepo(context)) {
-            return hideNoJj ? null : '无 JJ';
-        }
-
-        const description = runJjArgs([
+    protected getValue(context: RenderContext): string | null {
+        return runJjArgs([
             'log',
             '--no-graph',
             '-r',
@@ -63,19 +21,11 @@ export class JjDescriptionWidget implements Widget {
             '-T',
             'description.first_line()'
         ], context, true);
-        if (description === null) {
-            return hideNoJj ? null : '无 JJ';
-        }
+    }
 
+    protected formatValue(_item: WidgetItem, description: string): string {
         return description.length > 0 ? description : '(无描述)';
     }
 
-    getCustomKeybinds(): CustomKeybind[] {
-        return [
-            { key: 'h', label: '(h)隐藏「无 JJ」提示', action: 'toggle-nojj' }
-        ];
-    }
-
     supportsRawValue(): boolean { return false; }
-    supportsColors(item: WidgetItem): boolean { return true; }
 }

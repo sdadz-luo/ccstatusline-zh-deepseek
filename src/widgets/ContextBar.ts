@@ -11,16 +11,24 @@ import {
     getContextConfig,
     getModelContextIdentifier
 } from '../utils/model-context';
+import {
+    formatPercent,
+    resolveNumberFormat
+} from '../utils/number-format';
 import { formatTokens } from '../utils/renderer';
 import { makeUsageProgressBar } from '../utils/usage';
 
+import { makeLineProgressBar } from './shared/progress-bar';
+import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 import { makeSliderBar } from './shared/usage-display';
 
-type DisplayMode = 'progress' | 'progress-short' | 'slider' | 'slider-only';
+const LABEL = '上下文: ';
+
+type DisplayMode = 'progress' | 'progress-short' | 'slider' | 'slider-only' | 'line';
 
 function getDisplayMode(item: WidgetItem): DisplayMode {
     const mode = item.metadata?.display;
-    if (mode === 'progress' || mode === 'slider' || mode === 'slider-only') {
+    if (mode === 'progress' || mode === 'slider' || mode === 'slider-only' || mode === 'line') {
         return mode;
     }
     return 'progress-short';
@@ -35,6 +43,7 @@ export class ContextBarWidget implements Widget {
     getDescription(): string { return '以进度条形式显示上下文用量'; }
     getDisplayName(): string { return '上下文进度条'; }
     getCategory(): string { return '上下文'; }
+    getLabelPrefix(): string { return LABEL; }
 
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         const mode = getDisplayMode(item);
@@ -46,6 +55,8 @@ export class ContextBarWidget implements Widget {
             modifiers.push('短进度条');
         } else if (mode === 'slider-only') {
             modifiers.push('仅短进度条');
+        } else if (mode === 'line') {
+            modifiers.push('细线进度条');
         }
 
         return {
@@ -66,7 +77,9 @@ export class ContextBarWidget implements Widget {
                 ? 'slider'
                 : currentMode === 'slider'
                     ? 'slider-only'
-                    : 'progress-short';
+                    : currentMode === 'slider-only'
+                        ? 'line'
+                        : 'progress-short';
 
         return {
             ...item,
@@ -79,51 +92,55 @@ export class ContextBarWidget implements Widget {
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
         const displayMode = getDisplayMode(item);
+        const tokenFormat = resolveNumberFormat('token', item, settings);
+        const percentFormat = resolveNumberFormat('percent', item, settings);
 
         if (context.isPreview) {
+            const usedDisplay = formatTokens(50000, tokenFormat, 0);
+            const totalDisplay = formatTokens(200000, tokenFormat, 0);
+            const percentDisplay = formatPercent(25, percentFormat, 0);
             if (isBarSliderMode(displayMode)) {
                 const slider = makeSliderBar(25);
-                const sliderDisplay = displayMode === 'slider' ? `${slider} 50k/200k (25%)` : slider;
-                return item.rawValue ? sliderDisplay : `上下文: ${sliderDisplay}`;
+                const sliderDisplay = displayMode === 'slider' ? `${slider} ${usedDisplay}/${totalDisplay} (${percentDisplay})` : slider;
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(), sliderDisplay);
             }
             const barWidth = displayMode === 'progress' ? 32 : 16;
-            const previewDisplay = `${makeUsageProgressBar(25, barWidth)} 50k/200k (25%)`;
-            return item.rawValue ? previewDisplay : `上下文: ${previewDisplay}`;
+            const previewBar = displayMode === 'line' ? makeLineProgressBar(25) : makeUsageProgressBar(25, barWidth);
+            const previewDisplay = `${previewBar} ${usedDisplay}/${totalDisplay} (${percentDisplay})`;
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), previewDisplay);
         }
 
         const contextWindowMetrics = getContextWindowMetrics(context.data);
 
-        let total = contextWindowMetrics.windowSize;
+        const modelIdentifier = getModelContextIdentifier(context.data?.model);
+        const total = getContextConfig(modelIdentifier, contextWindowMetrics.windowSize).maxTokens;
         let used = contextWindowMetrics.contextLengthTokens;
 
         if (used === null && context.tokenMetrics) {
             used = context.tokenMetrics.contextLength;
         }
 
-        if (total === null && context.tokenMetrics) {
-            const modelIdentifier = getModelContextIdentifier(context.data?.model);
-            total = getContextConfig(modelIdentifier).maxTokens;
-        }
-
-        if (used === null || total === null || total <= 0) {
+        if (used === null || total <= 0) {
             return null;
         }
 
         const percent = (used / total) * 100;
         const clampedPercent = Math.max(0, Math.min(100, percent));
-        const usedDisplay = formatTokens(used, 0);
-        const totalDisplay = formatTokens(total, 0);
+        const usedDisplay = formatTokens(used, tokenFormat, 0);
+        const totalDisplay = formatTokens(total, tokenFormat, 0);
+        const percentDisplay = formatPercent(clampedPercent, percentFormat, 0);
 
         if (isBarSliderMode(displayMode)) {
             const slider = makeSliderBar(clampedPercent);
-            const sliderDisplay = displayMode === 'slider' ? `${slider} ${usedDisplay}/${totalDisplay} (${Math.round(clampedPercent)}%)` : slider;
-            return item.rawValue ? sliderDisplay : `上下文: ${sliderDisplay}`;
+            const sliderDisplay = displayMode === 'slider' ? `${slider} ${usedDisplay}/${totalDisplay} (${percentDisplay})` : slider;
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), sliderDisplay);
         }
 
         const barWidth = displayMode === 'progress' ? 32 : 16;
-        const display = `${makeUsageProgressBar(clampedPercent, barWidth)} ${usedDisplay}/${totalDisplay} (${Math.round(clampedPercent)}%)`;
+        const bar = displayMode === 'line' ? makeLineProgressBar(clampedPercent) : makeUsageProgressBar(clampedPercent, barWidth);
+        const display = `${bar} ${usedDisplay}/${totalDisplay} (${percentDisplay})`;
 
-        return item.rawValue ? display : `上下文: ${display}`;
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(), display);
     }
 
     getCustomKeybinds(): CustomKeybind[] {
@@ -133,5 +150,7 @@ export class ContextBarWidget implements Widget {
     }
 
     supportsRawValue(): boolean { return true; }
+
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

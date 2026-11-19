@@ -27,6 +27,11 @@ function makeContext(overrides: Partial<RenderContext> = {}): RenderContext {
     return { ...overrides };
 }
 
+function render(item: WidgetItem, context: RenderContext = {}): string | null {
+    const widget = new SessionCostWidget();
+    return widget.render(item, context, DEFAULT_SETTINGS);
+}
+
 // 北京时间（UTC+8）周四 10:30，落在 9:00-12:00 波峰段
 const PEAK_THURSDAY = new Date('2026-11-19T02:30:00Z');
 // 北京时间周四 20:30，波谷
@@ -102,8 +107,8 @@ describe('SessionCostWidget', () => {
         });
     });
 
-    describe('render()', () => {
-        it('DeepSeek 模型按峰谷分段计价（波峰 1M + 波谷 1M 输入 = $0.45）', () => {
+    describe('render()：DeepSeek 峰谷计价', () => {
+        it('按峰谷分段计价（波峰 1M + 波谷 1M 输入 = $0.45）', () => {
             const ctx = makeContext({
                 data: { model: { id: 'deepseek-v4.1-flash[1m]' } },
                 tokenMetrics: makeMetrics(1_000_000, 1_000_000)
@@ -111,7 +116,7 @@ describe('SessionCostWidget', () => {
             expect(new SessionCostWidget().render(ITEM, ctx, DEFAULT_SETTINGS)).toBe('费用: $0.45');
         });
 
-        it('DeepSeek 费用折叠子代理 token（主、子各 1M 波峰输入 = $0.60）', () => {
+        it('折叠子代理 token（主、子各 1M 波峰输入 = $0.60）', () => {
             const ctx = makeContext({
                 data: { model: { id: 'deepseek-v4.1-flash[1m]' } },
                 tokenMetrics: makeMetrics(1_000_000, 0),
@@ -128,14 +133,87 @@ describe('SessionCostWidget', () => {
             expect(new SessionCostWidget().render(RAW_ITEM, ctx, DEFAULT_SETTINGS)).toBe('$0.45');
         });
 
+        it('DeepSeek 计费也遵循 zero 隐藏', () => {
+            const ctx = makeContext({
+                data: { model: { id: 'deepseek-v4.1-flash[1m]' } },
+                tokenMetrics: makeMetrics(0, 0)
+            });
+            expect(new SessionCostWidget().render(
+                { ...ITEM, metadata: { hide: 'zero' } },
+                ctx,
+                DEFAULT_SETTINGS
+            )).toBeNull();
+        });
+    });
+
+    describe('render()：官方费用路径', () => {
+        it('从状态 JSON 渲染会话费用', () => {
+            expect(render(
+                { id: 'session-cost', type: 'session-cost' },
+                { data: { cost: { total_cost_usd: 2.456 } } }
+            )).toBe('费用: $2.46');
+        });
+
+        it('缺少费用数据时不渲染', () => {
+            expect(render({ id: 'session-cost', type: 'session-cost' }, {})).toBeNull();
+        });
+
         it('非 DeepSeek 模型回退到官方 total_cost_usd', () => {
             const ctx = makeContext({ data: { model: { id: 'glm-5.3[1m]' }, cost: { total_cost_usd: 2.454 } } });
             expect(new SessionCostWidget().render(ITEM, ctx, DEFAULT_SETTINGS)).toBe('费用: $2.45');
         });
 
         it('preview 模式返回演示文案', () => {
-            expect(new SessionCostWidget().render(ITEM, makeContext({ isPreview: true }), DEFAULT_SETTINGS))
-                .toBe('费用: $2.45');
+            expect(render(ITEM, { isPreview: true })).toBe('费用: $2.45');
+        });
+
+        it('预览样例遵循所选费用格式', () => {
+            expect(render({
+                id: 'session-cost',
+                type: 'session-cost',
+                numberFormat: { style: 'whole' }
+            }, { isPreview: true })).toBe('费用: $2');
+        });
+
+        it('声明 zero 隐藏状态', () => {
+            expect(new SessionCostWidget().getHideableStates().map(state => state.key)).toEqual(['zero']);
+        });
+
+        it('仅在启用 zero 隐藏时隐藏 $0.00', () => {
+            const context: RenderContext = { data: { cost: { total_cost_usd: 0 } } };
+
+            expect(render({ id: 'session-cost', type: 'session-cost' }, context)).toBe('费用: $0.00');
+            expect(render({
+                id: 'session-cost',
+                type: 'session-cost',
+                metadata: { hide: 'zero' }
+            }, context)).toBeNull();
+            expect(render({
+                id: 'session-cost',
+                type: 'session-cost',
+                metadata: { hide: 'zero' }
+            }, { data: { cost: { total_cost_usd: 0.01 } } })).toBe('费用: $0.01');
+        });
+
+        it('显示为 $0.00 的亚分费用按零处理', () => {
+            expect(render({
+                id: 'session-cost',
+                type: 'session-cost',
+                metadata: { hide: 'zero' }
+            }, { data: { cost: { total_cost_usd: 0.001 } } })).toBeNull();
+        });
+
+        it.each([
+            { name: 'compact', numberFormat: { style: 'compact' as const } },
+            { name: 'whole', numberFormat: { style: 'whole' as const } },
+            { name: 'custom-decimal', numberFormat: { decimals: 4 } }
+        ])('在 $name 数字格式下仍保留 zero 隐藏', ({ numberFormat }) => {
+            expect(render({
+                id: 'session-cost',
+                type: 'session-cost',
+                metadata: { hide: 'zero' },
+                numberFormat
+            }, { data: { cost: { total_cost_usd: 0 } } })).toBeNull();
         });
     });
 });

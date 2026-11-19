@@ -1,11 +1,15 @@
+import type { NumberFormat } from '../../types/NumberFormat';
+import type { RenderContext } from '../../types/RenderContext';
 import type {
     CustomKeybind,
+    HideableState,
     WidgetItem
 } from '../../types/Widget';
 import {
     DEFAULT_RESET_LOCALE,
     canonicalizeLocale
 } from '../../utils/locales';
+import { formatPercent } from '../../utils/number-format';
 
 import { makeModifierText } from './editor-display';
 import {
@@ -13,8 +17,34 @@ import {
     removeMetadataKeys,
     toggleMetadataFlag
 } from './metadata';
+import type { TimerProgressBarOptions } from './progress-bar';
+import {
+    makeLineProgressBar,
+    makeTimerProgressBar
+} from './progress-bar';
 
-export type UsageDisplayMode = 'time' | 'progress' | 'progress-short' | 'slider' | 'slider-only';
+export type UsageDisplayMode = 'time' | 'progress' | 'progress-short' | 'slider' | 'slider-only' | 'line';
+
+// Shared by the usage percentage widgets and the reset timers.
+// Hour-format toggles use f so h remains available for the hide checklist.
+export const USAGE_NO_DATA_HIDEABLE_STATE: HideableState = { key: 'no-data', label: '用量数据不可用时' };
+// Block Reset Timer's: show the reset countdown only once the 5-hour limit is
+// hit. Here rather than in the widget so the usage prefetch can read it.
+export const SESSION_UNDER_LIMIT_HIDEABLE_STATE: HideableState = { key: 'under-limit', label: '5 小时时段用量未达 100% 时' };
+// Block Usage's: hide the percent once the limit is hit, so with both states on
+// the reset countdown takes its place. Here for the same reason.
+export const SESSION_AT_LIMIT_HIDEABLE_STATE: HideableState = { key: 'at-limit', label: '5 小时时段用量已达 100% 时' };
+
+// Whether the 5-hour block is at its limit, for both states above, so Block
+// Usage and Block Reset Timer always swap at the same render. The usage API's
+// percent decides when prefetch accepted one (see usage-prefetch.ts), then the
+// payload's own: merged usage data can still hold an API percent prefetch
+// rejected as stale or from a block that has since reset. The raw percent, not
+// the rounded one: 99.7% isn't the limit yet.
+export function isAtSessionLimit(context: RenderContext): boolean {
+    const sessionUsage = context.usageData?.apiSessionUsage ?? context.data?.rate_limits?.five_hour?.used_percentage;
+    return typeof sessionUsage === 'number' && sessionUsage >= 100;
+}
 
 const SLIDER_WIDTH = 10;
 
@@ -23,21 +53,21 @@ const INVERT_TOGGLE_KEYBIND: CustomKeybind = { key: 'v', label: '(v)反转填充
 const COMPACT_TOGGLE_KEYBIND: CustomKeybind = { key: 's', label: '(s)短时间', action: 'toggle-compact' };
 const CURSOR_TOGGLE_KEYBIND: CustomKeybind = { key: 't', label: '(t)时间游标', action: 'toggle-cursor' };
 const DATE_TOGGLE_KEYBIND: CustomKeybind = { key: 't', label: '(t)时间戳', action: 'toggle-date' };
-const HOUR_FORMAT_TOGGLE_KEYBIND: CustomKeybind = { key: 'h', label: '12/24 小时(h)', action: 'toggle-hour-format' };
+const HOUR_FORMAT_TOGGLE_KEYBIND: CustomKeybind = { key: 'f', label: '12/24 小时(f)', action: 'toggle-hour-format' };
 const WEEKDAY_TOGGLE_KEYBIND: CustomKeybind = { key: 'w', label: '(w)星期', action: 'toggle-weekday' };
 const TIMEZONE_KEYBIND: CustomKeybind = { key: 'z', label: '时区(z)', action: 'edit-timezone' };
 const LOCALE_KEYBIND: CustomKeybind = { key: 'l', label: '(l)地区', action: 'edit-locale' };
 
 export function getUsageDisplayMode(item: WidgetItem): UsageDisplayMode {
     const mode = item.metadata?.display;
-    if (mode === 'progress' || mode === 'progress-short' || mode === 'slider' || mode === 'slider-only') {
+    if (mode === 'progress' || mode === 'progress-short' || mode === 'slider' || mode === 'slider-only' || mode === 'line') {
         return mode;
     }
     return 'time';
 }
 
 export function isUsageProgressMode(mode: UsageDisplayMode): boolean {
-    return mode === 'progress' || mode === 'progress-short';
+    return mode === 'progress' || mode === 'progress-short' || mode === 'line';
 }
 
 export function isUsageSliderMode(mode: UsageDisplayMode): boolean {
@@ -45,6 +75,38 @@ export function isUsageSliderMode(mode: UsageDisplayMode): boolean {
 }
 
 interface SliderBarOptions { cursorPercent?: number }
+
+// 用量百分比口径：数据源已取整（如 opencode 的整数百分比）且无显式精度覆盖
+// 时，不再补恒为 0 的小数位，避免暗示不存在的 0.1 分辨率；真实小数仍按
+// 基线精度显示。
+export function formatUsagePercentValue(percent: number, format: NumberFormat): string {
+    const baselineDecimals = format.decimals === undefined && Number.isInteger(percent) ? 0 : 1;
+    return formatPercent(percent, format, baselineDecimals);
+}
+
+// The bar modes' text: "[████░░░░] 50.0%", "━━━━──── 50.0%", "▓▓▓▓░░░░ 50.0%" or
+// "▓▓▓▓░░░░". Null in the other modes, without calling getCursor, which can be costly
+// to resolve.
+export function formatUsageBar(
+    item: WidgetItem,
+    percent: number,
+    format: NumberFormat,
+    getCursor: () => SliderBarOptions | undefined = () => undefined,
+    // 用量百分比组件注入数据源口径的格式化（整数不补 .0）；其他 bar 使用者
+    // （重置计时器等，百分比来自本地计时）沿用通用 formatPercent。
+    percentFormatter?: (percent: number) => string
+): string | null {
+    const formatValue = percentFormatter ?? ((value: number) => formatPercent(value, format));
+    const mode = getUsageDisplayMode(item);
+    if (isUsageProgressMode(mode)) {
+        return `${renderUsageProgressBar(percent, mode, getCursor())} ${formatValue(percent)}`;
+    }
+    if (isUsageSliderMode(mode)) {
+        const slider = makeSliderBar(percent, undefined, getCursor());
+        return mode === 'slider' ? `${slider} ${formatValue(percent)}` : slider;
+    }
+    return null;
+}
 
 export function makeSliderBar(percent: number, width: number = SLIDER_WIDTH, options?: SliderBarOptions): string {
     const clamped = Math.max(0, Math.min(100, percent));
@@ -71,13 +133,12 @@ export function getUsageProgressBarWidth(mode: UsageDisplayMode): number {
     return mode === 'progress' ? 32 : 16;
 }
 
-// opencode 的用量接口在服务端就 Math.floor 到整数（见 README「opencode 用量数据源」），
-// 对这类值再 toFixed(1) 只会补一个恒为 0 的小数位，看着像有 0.1 分辨率其实没有。
-// 整数就不带小数位，真带小数的数据源（Claude 的 utilization）仍保留一位。
-export function formatUsagePercent(percent: number): string {
-    const fixed = percent.toFixed(1);
-    // 先 toFixed 再判断，顺带吸收浮点误差（如 79.999… 归一成 "80.0"）
-    return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed;
+// Block modes keep their brackets; the thin line uses the same medium width.
+export function renderUsageProgressBar(percent: number, mode: UsageDisplayMode, options?: TimerProgressBarOptions): string {
+    const width = getUsageProgressBarWidth(mode);
+    return mode === 'line'
+        ? makeLineProgressBar(percent, width, options)
+        : `[${makeTimerProgressBar(percent, width, options)}]`;
 }
 
 export function isUsageInverted(item: WidgetItem): boolean {
@@ -173,8 +234,22 @@ export function toggleUsageWeekday(item: WidgetItem): WidgetItem {
     return toggleMetadataFlag(item, 'weekday');
 }
 
+// For the usage widgets that only ever render text. A type change in the widget
+// picker keeps the old widget's metadata, but its bar mode doesn't apply, nor
+// does inverting that bar's fill unless the widget shows used or remaining.
+export function getUsageTextModifierText(
+    item: WidgetItem,
+    options: UsageDisplayModifierOptions = {}
+): string | undefined {
+    const barKeys = options.showUsageDirection ? ['display'] : ['display', 'invert'];
+    return getUsageDisplayModifierText(removeMetadataKeys(item, barKeys), options);
+}
+
 interface UsageDisplayModifierOptions {
     includeCompact?: boolean;
+    // Only for widgets that draw a time cursor: the cursor metadata outlives a
+    // type change in the widget picker
+    includeCursor?: boolean;
     includeDate?: boolean;
     showUsageDirection?: boolean;
 }
@@ -194,6 +269,8 @@ export function getUsageDisplayModifierText(
         modifiers.push('短进度条');
     } else if (mode === 'slider-only') {
         modifiers.push('仅短进度条');
+    } else if (mode === 'line') {
+        modifiers.push('细线进度条');
     }
 
     if (options.showUsageDirection) {
@@ -202,7 +279,7 @@ export function getUsageDisplayModifierText(
         modifiers.push('反转');
     }
 
-    if (isUsageCursorEnabled(item) && (isUsageProgressMode(mode) || isUsageSliderMode(mode))) {
+    if (options.includeCursor && isUsageCursorEnabled(item) && (isUsageProgressMode(mode) || isUsageSliderMode(mode))) {
         modifiers.push('时间游标');
     }
 
@@ -243,13 +320,17 @@ export function cycleUsageDisplayMode(item: WidgetItem, disabledInProgressKeys: 
                     ? 'slider'
                     : currentMode === 'slider'
                         ? 'slider-only'
-                        : 'time';
+                        : currentMode === 'slider-only'
+                            ? 'line'
+                            : 'time';
     } else {
         nextMode = currentMode === 'time'
             ? 'progress'
             : currentMode === 'progress'
                 ? 'progress-short'
-                : 'time';
+                : currentMode === 'progress-short'
+                    ? 'line'
+                    : 'time';
     }
 
     const keysToRemove = nextMode === 'time' ? (preserveInvertInTime ? ['cursor'] : ['invert', 'cursor']) : disabledInProgressKeys;
@@ -269,11 +350,19 @@ export function toggleUsageInverted(item: WidgetItem): WidgetItem {
     return toggleMetadataFlag(item, 'invert');
 }
 
-export function getUsagePercentCustomKeybinds(item?: WidgetItem, includeCursor = true): CustomKeybind[] {
+export function getUsageDirectionKeybind(item?: WidgetItem): CustomKeybind {
     const nextDirection = item && isUsageInverted(item) ? '已用' : '剩余';
+    return { key: 'u', label: `(u)显示${nextDirection}`, action: 'toggle-invert' };
+}
+
+export function getUsageCompactKeybind(): CustomKeybind {
+    return COMPACT_TOGGLE_KEYBIND;
+}
+
+export function getUsagePercentCustomKeybinds(item?: WidgetItem, includeCursor = true): CustomKeybind[] {
     const keybinds: CustomKeybind[] = [
         PROGRESS_TOGGLE_KEYBIND,
-        { key: 'u', label: `(u)显示${nextDirection}`, action: 'toggle-invert' }
+        getUsageDirectionKeybind(item)
     ];
 
     if (item && includeCursor) {
@@ -300,7 +389,10 @@ export function getUsageTimerCustomKeybinds(
 ): CustomKeybind[] {
     const keybinds = [PROGRESS_TOGGLE_KEYBIND];
 
-    if (item && isUsageProgressMode(getUsageDisplayMode(item))) {
+    const mode = item ? getUsageDisplayMode(item) : 'time';
+    const isBarMode = isUsageProgressMode(mode) || isUsageSliderMode(mode);
+
+    if (item && isBarMode) {
         keybinds.push(INVERT_TOGGLE_KEYBIND);
     } else {
         keybinds.push(COMPACT_TOGGLE_KEYBIND);
@@ -310,7 +402,7 @@ export function getUsageTimerCustomKeybinds(
         }
     }
 
-    if (item && isUsageDateMode(item) && !isUsageProgressMode(getUsageDisplayMode(item))) {
+    if (item && isUsageDateMode(item) && !isBarMode) {
         if (options.includeHourFormat) {
             keybinds.push(HOUR_FORMAT_TOGGLE_KEYBIND);
         }

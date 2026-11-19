@@ -1,5 +1,5 @@
-import { execFile } from 'child_process';
-import * as https from 'https';
+import { execFile } from 'node:child_process';
+import * as https from 'node:https';
 
 import type {
     InstallationMetadata,
@@ -12,12 +12,18 @@ import {
     classifyInstallation,
     type PackageCommandAvailability
 } from './claude-settings';
+import { isExcludedFromProxy } from './no-proxy';
 import {
     getPackageManagerExecutable,
     getPackageManagerShellOptions
 } from './package-manager-executable';
+import {
+    createProxyAgent,
+    type ClosableProxyAgent
+} from './proxy-agent';
 
-export const NPM_REGISTRY_LATEST_URL = 'https://registry.npmjs.org/ccstatusline-zh/latest';
+const NPM_REGISTRY_HOST = 'registry.npmjs.org';
+export const NPM_REGISTRY_LATEST_URL = `https://${NPM_REGISTRY_HOST}/ccstatusline-zh/latest`;
 const DEFAULT_REGISTRY_TIMEOUT_MS = 5000;
 const GLOBAL_UPDATE_TIMEOUT_MS = 120000;
 
@@ -69,9 +75,18 @@ export interface CheckForUpdatesOptions extends Omit<BuildUpdateCheckResultOptio
 
 export interface RunGlobalPackageInstallOptions { platform?: NodeJS.Platform }
 
+// A plain release version (semver). The version goes into the install
+// commands the TUI shows and, for npm on Windows, into a cmd.exe command line,
+// so nothing that a shell could read as syntax gets through.
+const RELEASE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function isReleaseVersion(version: string): boolean {
+    return RELEASE_VERSION.test(version);
+}
+
 function parseVersion(version: string): number[] {
     return version.split(/[.-]/).map((part) => {
-        const parsed = parseInt(part, 10);
+        const parsed = Number.parseInt(part, 10);
         return Number.isFinite(parsed) ? parsed : 0;
     });
 }
@@ -227,6 +242,10 @@ export async function checkForUpdates({
 }: CheckForUpdatesOptions): Promise<UpdateCheckResult> {
     try {
         const latestVersion = await latestVersionFetcher(timeoutMs);
+        if (!isReleaseVersion(latestVersion)) {
+            throw new Error('npm 仓库返回了无效的版本号');
+        }
+
         return buildUpdateCheckResult({
             currentVersion,
             latestVersion,
@@ -244,20 +263,66 @@ export async function checkForUpdates({
     }
 }
 
-export function fetchLatestNpmVersion(timeoutMs = DEFAULT_REGISTRY_TIMEOUT_MS): Promise<string> {
+interface RegistryResponse {
+    statusCode?: number;
+    resume(): unknown;
+    setEncoding(encoding: BufferEncoding): unknown;
+    on(event: 'data', listener: (chunk: string) => void): unknown;
+    on(event: 'end', listener: () => void): unknown;
+}
+
+interface RegistryRequest {
+    destroy(error?: Error): unknown;
+    end(): unknown;
+    on(event: 'error', listener: (error: Error) => void): unknown;
+}
+
+type RegistryRequestFn = (
+    url: string,
+    options: https.RequestOptions,
+    onResponse: (response: RegistryResponse) => void
+) => RegistryRequest;
+
+const requestRegistry: RegistryRequestFn = (url, options, onResponse) => https.request(url, options, onResponse);
+
+function getRegistryProxyUrl(): string | null {
+    const proxyUrl = process.env.HTTPS_PROXY?.trim();
+    return proxyUrl?.length && !isExcludedFromProxy(NPM_REGISTRY_HOST) ? proxyUrl : null;
+}
+
+export function fetchLatestNpmVersion(
+    timeoutMs = DEFAULT_REGISTRY_TIMEOUT_MS,
+    requestFn: RegistryRequestFn = requestRegistry
+): Promise<string> {
+    let proxy: ClosableProxyAgent | null;
+    try {
+        const proxyUrl = getRegistryProxyUrl();
+        proxy = proxyUrl ? createProxyAgent(proxyUrl) : null;
+    } catch {
+        return Promise.reject(new Error('HTTPS_PROXY is not a valid URL'));
+    }
+
     return new Promise((resolve, reject) => {
-        const request = https.request(
+        const fail = (error: Error) => {
+            clearTimeout(deadline);
+            reject(error);
+        };
+
+        const request = requestFn(
             NPM_REGISTRY_LATEST_URL,
             {
                 headers: {
                     'Accept': 'application/json',
                     'User-Agent': 'ccstatusline-zh'
-                }
+                },
+                ...(proxy ? { agent: proxy.agent } : {})
             },
             (response) => {
                 if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-                    response.resume();
-                    reject(new Error(`npm 仓库返回 HTTP ${response.statusCode ?? 'unknown'}`));
+                    // The error body may never finish. Close the connection before
+                    // fail clears the deadline so it cannot keep the process alive.
+                    request.destroy();
+                    fail(new Error(`npm 仓库返回 HTTP ${response.statusCode ?? 'unknown'}`));
                     return;
                 }
 
@@ -272,23 +337,30 @@ export function fetchLatestNpmVersion(timeoutMs = DEFAULT_REGISTRY_TIMEOUT_MS): 
                     try {
                         const parsed = JSON.parse(body) as { version?: unknown };
                         if (typeof parsed.version !== 'string' || parsed.version.trim() === '') {
-                            reject(new Error('npm 仓库响应中未包含版本号'));
+                            fail(new Error('npm 仓库响应中未包含版本号'));
                             return;
                         }
 
+                        clearTimeout(deadline);
                         resolve(parsed.version);
                     } catch (error) {
-                        reject(error instanceof Error ? error : new Error(String(error)));
+                        fail(error instanceof Error ? error : new Error(String(error)));
                     }
                 });
             }
         );
 
-        request.setTimeout(timeoutMs, () => {
-            request.destroy(new Error(`npm 仓库请求超过 ${timeoutMs}ms 未响应`));
-        });
-
-        request.on('error', reject);
+        request.on('error', fail);
+        // Covers the whole request. A socket timeout only starts once the socket
+        // connects, and Bun's doesn't fire while it connects, so on a network
+        // that drops the connection it would wait for the OS to give up. Behind
+        // a proxy the request has no socket until the proxy answers CONNECT.
+        const deadline = setTimeout(() => {
+            const error = new Error(`npm 仓库请求超过 ${timeoutMs}ms 未响应`);
+            request.destroy(error);
+            proxy?.close();
+            fail(error);
+        }, timeoutMs);
         request.end();
     });
 }
@@ -298,6 +370,10 @@ export function runGlobalPackageInstall(
     version: string,
     { platform = process.platform }: RunGlobalPackageInstallOptions = {}
 ): Promise<void> {
+    if (!isReleaseVersion(version)) {
+        return Promise.reject(new Error('不是有效的 ccstatusline-zh 发布版本'));
+    }
+
     const executable = getPackageManagerExecutable(packageManager, platform);
     const args = packageManager === 'npm'
         ? ['install', '-g', `ccstatusline-zh@${version}`]

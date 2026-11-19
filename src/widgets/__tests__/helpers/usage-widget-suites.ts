@@ -31,6 +31,7 @@ interface UsagePercentWidgetSuiteConfig<TWidget extends UsageWidgetLike> {
     expectedRawTime: string;
     expectedInvertedTime: string;
     expectedTime: string;
+    expectedWholePercentTime: string;
     modifierItem: WidgetItem;
     progressItem: WidgetItem;
     rawProgressItem: WidgetItem;
@@ -134,8 +135,18 @@ export function runUsagePercentWidgetSuite<TWidget extends UsageWidgetLike>(conf
     it('shows usage error text when API call fails', () => {
         const widget = config.createWidget();
 
-        config.errorMessageMock.mockReturnValue('[Timeout]');
-        expect(config.render(widget, config.baseItem, { usageData: { error: 'timeout' } })).toBe('[Timeout]');
+        config.errorMessageMock.mockReturnValue('[超时]');
+        expect(config.render(widget, config.baseItem, { usageData: { error: 'timeout' } })).toBe('[超时]');
+    });
+
+    it('hides usage error text when the no-data state is enabled', () => {
+        const widget = config.createWidget();
+
+        config.errorMessageMock.mockReturnValue('[超时]');
+        expect(config.render(widget, {
+            ...config.baseItem,
+            metadata: { hide: 'no-data' }
+        }, { usageData: { error: 'timeout' } })).toBeNull();
     });
 
     it('renders available usage data before unrelated usage errors', () => {
@@ -148,6 +159,21 @@ export function runUsagePercentWidgetSuite<TWidget extends UsageWidgetLike>(conf
         };
 
         expect(config.render(widget, config.baseItem, context)).toBe(config.expectedTime);
+    });
+
+    // formatPercent's format argument is optional and its default reproduces the
+    // baseline output, so a render path that stops passing the resolved format
+    // stays invisible against default settings. Pinning a non-default style is
+    // what makes that reachable.
+    it('applies the resolved number format to the percentage', () => {
+        const widget = config.createWidget();
+        const context = getUsageContext(config.usageField, config.usageValue);
+        const wholePercentItem: WidgetItem = {
+            ...config.baseItem,
+            numberFormat: { style: 'whole' }
+        };
+
+        expect(config.render(widget, wholePercentItem, context)).toBe(config.expectedWholePercentTime);
     });
 
     it('renders inverted percentage in time mode', () => {
@@ -172,7 +198,7 @@ export function runUsagePercentWidgetSuite<TWidget extends UsageWidgetLike>(conf
         const updated = widget.handleEditorAction('toggle-progress', {
             ...config.baseItem,
             metadata: {
-                display: 'slider-only',
+                display: 'line',
                 invert: 'true',
                 cursor: 'true'
             }
@@ -191,12 +217,14 @@ export function runUsagePercentWidgetSuite<TWidget extends UsageWidgetLike>(conf
         const third = widget.handleEditorAction('toggle-progress', second ?? config.baseItem);
         const fourth = widget.handleEditorAction('toggle-progress', third ?? config.baseItem);
         const fifth = widget.handleEditorAction('toggle-progress', fourth ?? config.baseItem);
+        const sixth = widget.handleEditorAction('toggle-progress', fifth ?? config.baseItem);
 
         expect(first?.metadata?.display).toBe('progress');
         expect(second?.metadata?.display).toBe('progress-short');
         expect(third?.metadata?.display).toBe('slider');
         expect(fourth?.metadata?.display).toBe('slider-only');
-        expect(fifth?.metadata?.display).toBe('time');
+        expect(fifth?.metadata?.display).toBe('line');
+        expect(sixth?.metadata?.display).toBe('time');
     });
 
     it('toggles invert metadata and shows used/remaining editor modifiers', () => {
@@ -211,7 +239,7 @@ export function runUsagePercentWidgetSuite<TWidget extends UsageWidgetLike>(conf
         expect(widget.getEditorDisplay(config.modifierItem).modifierText).toBe(config.expectedModifierText);
     });
 
-    it('shows time cursor editor modifiers in short bar modes', () => {
+    it('shows 时间游标 editor modifiers in 短进度条 modes', () => {
         const widget = config.createWidget();
 
         expect(widget.getEditorDisplay({
@@ -264,7 +292,7 @@ export function runUsageTimerEditorSuite<TWidget extends UsageWidgetLike & { get
 
     it('clears invert metadata when cycling back to time mode', () => {
         const widget = config.createWidget();
-        const lastBarMode = config.supportsSliderMode ? 'slider-only' : 'progress-short';
+        const lastBarMode = 'line';
         const updated = widget.handleEditorAction('toggle-progress', {
             ...config.baseItem,
             metadata: {
@@ -290,12 +318,16 @@ export function runUsageTimerEditorSuite<TWidget extends UsageWidgetLike & { get
         if (config.supportsSliderMode) {
             const fourth = widget.handleEditorAction('toggle-progress', third ?? config.baseItem);
             const fifth = widget.handleEditorAction('toggle-progress', fourth ?? config.baseItem);
+            const sixth = widget.handleEditorAction('toggle-progress', fifth ?? config.baseItem);
 
             expect(third?.metadata?.display).toBe('slider');
             expect(fourth?.metadata?.display).toBe('slider-only');
-            expect(fifth?.metadata?.display).toBe('time');
+            expect(fifth?.metadata?.display).toBe('line');
+            expect(sixth?.metadata?.display).toBe('time');
         } else {
-            expect(third?.metadata?.display).toBe('time');
+            expect(third?.metadata?.display).toBe('line');
+            const fourth = widget.handleEditorAction('toggle-progress', third ?? config.baseItem);
+            expect(fourth?.metadata?.display).toBe('time');
         }
     });
 

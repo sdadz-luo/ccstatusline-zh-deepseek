@@ -53,6 +53,14 @@ describe('ContextPercentageWidget', () => {
         }).modifierText).toBe('(剩余)');
     });
 
+    it('reports the default label for the current used/remaining mode', () => {
+        const widget = new ContextPercentageWidget();
+        const base: WidgetItem = { id: 'context-percentage', type: 'context-percentage' };
+
+        expect(widget.getLabelPrefix(base)).toBe('已用: ');
+        expect(widget.getLabelPrefix({ ...base, metadata: { inverse: 'true' } })).toBe('剩余: ');
+    });
+
     it('prefers context_window percentage over token metrics when both exist', () => {
         const widget = new ContextPercentageWidget();
         const item: WidgetItem = {
@@ -79,13 +87,37 @@ describe('ContextPercentageWidget', () => {
         expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('已用: 9.3%');
     });
 
+    it('leaves output tokens out of the percentage worked out from current_usage', () => {
+        const widget = new ContextPercentageWidget();
+        const item: WidgetItem = {
+            id: 'context-percentage',
+            type: 'context-percentage'
+        };
+        const context: RenderContext = {
+            data: {
+                model: { id: 'claude-sonnet-4-5-20250929' },
+                context_window: {
+                    context_window_size: 200000,
+                    current_usage: {
+                        input_tokens: 10000,
+                        output_tokens: 30000,
+                        cache_creation_input_tokens: 2000,
+                        cache_read_input_tokens: 38000
+                    }
+                }
+            }
+        };
+
+        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe('已用: 25.0%');
+    });
+
     describe('Sonnet 4.5 with 1M context window', () => {
         it('should calculate percentage using 1M denominator for Sonnet 4.5 with [1m] suffix', () => {
             const result = render('claude-sonnet-4-5-20250929[1m]', 42000);
             expect(result).toBe('已用: 4.2%');
         });
 
-        it('should calculate percentage using 1M denominator for Sonnet 4.5 (raw value) with [1m] suffix', () => {
+        it('should calculate percentage using 1M denominator for Sonnet 4.5 (纯值) with [1m] suffix', () => {
             const result = render('claude-sonnet-4-5-20250929[1m]', 42000, true);
             expect(result).toBe('4.2%');
         });
@@ -107,10 +139,12 @@ describe('ContextPercentageWidget', () => {
 
         const slider = widget.handleEditorAction('toggle-slider', base);
         const sliderOnly = widget.handleEditorAction('toggle-slider', slider ?? base);
-        const none = widget.handleEditorAction('toggle-slider', sliderOnly ?? base);
+        const line = widget.handleEditorAction('toggle-slider', sliderOnly ?? base);
+        const none = widget.handleEditorAction('toggle-slider', line ?? base);
 
         expect(slider?.metadata?.display).toBe('slider');
         expect(sliderOnly?.metadata?.display).toBe('slider-only');
+        expect(line?.metadata?.display).toBe('line');
         expect(none?.metadata?.display).toBeUndefined();
     });
 

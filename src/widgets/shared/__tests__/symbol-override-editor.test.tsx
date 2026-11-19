@@ -8,7 +8,9 @@ import {
     vi
 } from 'vitest';
 
+import { waitFor } from '../../../tui/__tests__/helpers/wait-for-ink';
 import type { WidgetItem } from '../../../types/Widget';
+import { getVisibleWidth } from '../../../utils/ansi';
 import {
     renderSymbolSlotsEditor,
     type SymbolSlot
@@ -32,7 +34,10 @@ class MockTtyStream extends PassThrough {
     }
 }
 
-interface CapturedWriteStream extends NodeJS.WriteStream { getOutput: () => string }
+interface CapturedWriteStream extends NodeJS.WriteStream {
+    clearOutput: () => void;
+    getOutput: () => string;
+}
 
 function createMockStdin(): NodeJS.ReadStream {
     return new MockTtyStream() as unknown as NodeJS.ReadStream;
@@ -47,23 +52,20 @@ function createMockStdout(): CapturedWriteStream {
     });
 
     return Object.assign(stream as unknown as NodeJS.WriteStream, {
+        clearOutput() {
+            chunks.length = 0;
+        },
         getOutput() {
             return chunks.join('');
         }
     });
 }
 
-function flushInk() {
-    return new Promise((resolve) => {
-        setTimeout(resolve, 25);
-    });
-}
-
 const gitStatusSlots: SymbolSlot[] = [
-    { id: 'symbolConflicts', label: 'Conflicts', defaultSymbol: '!' },
-    { id: 'symbolStaged', label: 'Staged', defaultSymbol: '+' },
-    { id: 'symbolUnstaged', label: 'Unstaged', defaultSymbol: '*' },
-    { id: 'symbolUntracked', label: 'Untracked', defaultSymbol: '?' }
+    { id: 'symbolConflicts', label: '冲突', defaultSymbol: '!' },
+    { id: 'symbolStaged', label: '已暂存', defaultSymbol: '+' },
+    { id: 'symbolUnstaged', label: '未暂存', defaultSymbol: '*' },
+    { id: 'symbolUntracked', label: '未追踪', defaultSymbol: '?' }
 ];
 
 function renderEditor(widget: WidgetItem, slots: SymbolSlot[] = gitStatusSlots, onComplete = vi.fn(), onCancel = vi.fn()) {
@@ -110,18 +112,51 @@ function getPlainOutput(output: string): string {
 }
 
 describe('SymbolSlotsEditor', () => {
+    it.each([
+        { name: 'BMP Nerd Font icon', glyph: '\uF1EB', preview: '\uF1EB ' },
+        { name: 'supplementary Nerd Font icon', glyph: '\u{F05AA}', preview: '\u{F05AA} ' },
+        { name: 'wide emoji', glyph: '📡', preview: '📡' },
+        { name: 'combining character', glyph: 'e\u0301', preview: 'e\u0301 ' },
+        { name: 'empty glyph', glyph: '', preview: '（无）' }
+    ])('preserves the $name preview padding across blink frames without saving it', async ({ glyph, preview }) => {
+        const slots: SymbolSlot[] = [
+            { id: 'symbolOn', label: 'On', defaultSymbol: glyph },
+            { id: 'symbolOff', label: 'Off', defaultSymbol: glyph }
+        ];
+        const rendered = renderEditor({ id: 'remote', type: 'remote-control-status' }, slots);
+
+        try {
+            for (let frame = 0; frame < 3; frame++) {
+                await waitFor(() => {
+                    const output = getPlainOutput(rendered.stdout.getOutput());
+                    expect(output).toContain(`On: ${preview}（默认:`);
+                    expect(output).toContain(`Off: ${preview}（默认:`);
+                });
+                rendered.stdout.clearOutput();
+            }
+            rendered.stdin.write('\r');
+            await waitFor(() => {
+                expect(rendered.onComplete).toHaveBeenCalledTimes(1);
+            });
+            const updated = rendered.onComplete.mock.calls[0]?.[0] as WidgetItem | undefined;
+            expect(updated?.metadata).toBeUndefined();
+        } finally {
+            cleanupEditor(rendered);
+        }
+    });
+
     it('right-aligns labels so glyph values start in the same column', async () => {
         const rendered = renderEditor({ id: 'git-status', type: 'git-status' });
 
         try {
-            await flushInk();
-
-            const lines = getPlainOutput(rendered.stdout.getOutput())
+            const slotLines = () => getPlainOutput(rendered.stdout.getOutput())
                 .split('\n')
                 .filter(line => gitStatusSlots.some(slot => line.includes(`${slot.label}:`)));
-            const colonColumns = lines.map(line => line.indexOf(':'));
+            await waitFor(() => {
+                expect(slotLines()).toHaveLength(gitStatusSlots.length);
+            });
 
-            expect(lines).toHaveLength(gitStatusSlots.length);
+            const colonColumns = slotLines().map(line => getVisibleWidth(line.slice(0, line.indexOf(':'))));
             expect(new Set(colonColumns)).toHaveLength(1);
         } finally {
             cleanupEditor(rendered);
@@ -136,12 +171,85 @@ describe('SymbolSlotsEditor', () => {
         });
 
         try {
-            await flushInk();
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
+            // Any new frame after Tab means the reset was handled
+            rendered.stdout.clearOutput();
             rendered.stdin.write('\t');
-            await flushInk();
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
             rendered.stdin.write('\r');
-            await flushInk();
+            await waitFor(() => {
+                expect(rendered.onComplete).toHaveBeenCalledTimes(1);
+            });
 
+            const updated = rendered.onComplete.mock.calls[0]?.[0] as WidgetItem | undefined;
+            expect(updated?.metadata).toBeUndefined();
+        } finally {
+            cleanupEditor(rendered);
+        }
+    });
+
+    it('blanks every slot on Shift+Tab', async () => {
+        const rendered = renderEditor({ id: 'git-status', type: 'git-status' });
+
+        try {
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
+            // Any new frame after Shift+Tab means the toggle was handled
+            rendered.stdout.clearOutput();
+            rendered.stdin.write('\x1B[Z');
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
+            rendered.stdin.write('\r');
+            await waitFor(() => {
+                expect(rendered.onComplete).toHaveBeenCalledTimes(1);
+            });
+
+            const updated = rendered.onComplete.mock.calls[0]?.[0] as WidgetItem | undefined;
+            expect(updated?.metadata).toEqual({
+                symbolConflicts: '',
+                symbolStaged: '',
+                symbolUnstaged: '',
+                symbolUntracked: ''
+            });
+        } finally {
+            cleanupEditor(rendered);
+        }
+    });
+
+    it('restores every default on a second Shift+Tab', async () => {
+        const rendered = renderEditor({
+            id: 'git-status',
+            type: 'git-status',
+            metadata: {
+                symbolConflicts: '',
+                symbolStaged: '',
+                symbolUnstaged: '',
+                symbolUntracked: ''
+            }
+        });
+
+        try {
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
+            // Any new frame after Shift+Tab means the toggle was handled
+            rendered.stdout.clearOutput();
+            rendered.stdin.write('\x1B[Z');
+            await waitFor(() => {
+                expect(rendered.stdout.getOutput()).toContain('冲突:');
+            });
+            rendered.stdin.write('\r');
+            await waitFor(() => {
+                expect(rendered.onComplete).toHaveBeenCalledTimes(1);
+            });
+
+            // Every slot back at its default stores no overrides at all.
             const updated = rendered.onComplete.mock.calls[0]?.[0] as WidgetItem | undefined;
             expect(updated?.metadata).toBeUndefined();
         } finally {

@@ -15,24 +15,48 @@ import type {
     WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
+import type { IdeLinkMode } from '../utils/hyperlink';
+import {
+    IDE_LINK_MODES,
+    buildFileUrl,
+    buildIdeFileUrl,
+    renderOsc8Link
+} from '../utils/hyperlink';
 import { shouldInsertInput } from '../utils/input-guards';
 
+import { BlinkingCursor } from './shared/BlinkingCursor';
+import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 import {
     SYMBOL_OVERRIDE_ACTION,
     formatSymbolPrefix,
     getSymbolKeybind,
     renderSymbolOverrideEditor
 } from './shared/symbol-override';
+import { getGraphemes } from './shared/text-cursor';
+
+const LABEL = 'cwd: ';
+const LINK_KEY = 'linkTo';
+const CYCLE_LINK_ACTION = 'cycle-link';
+const CWD_LINK_MODES = ['file', ...IDE_LINK_MODES] as const;
+type CwdLinkMode = (typeof CWD_LINK_MODES)[number];
+const LINK_MODE_LABELS: Record<CwdLinkMode, string> = {
+    file: '文件',
+    vscode: 'VS Code',
+    cursor: 'Cursor',
+    zed: 'Zed'
+};
 
 export class CurrentWorkingDirWidget implements Widget {
     getDefaultColor(): string { return 'blue'; }
     getDescription(): string { return '显示当前工作目录'; }
     getDisplayName(): string { return '当前目录'; }
     getCategory(): string { return '环境'; }
+    getLabelPrefix(): string { return LABEL; }
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        const segments = item.metadata?.segments ? parseInt(item.metadata.segments, 10) : undefined;
+        const segments = item.metadata?.segments ? Number.parseInt(item.metadata.segments, 10) : undefined;
         const fishStyle = item.metadata?.fishStyle === 'true';
         const abbreviateHome = item.metadata?.abbreviateHome === 'true';
+        const linkMode = this.getLinkMode(item);
         const modifiers: string[] = [];
 
         if (abbreviateHome) {
@@ -45,6 +69,10 @@ export class CurrentWorkingDirWidget implements Widget {
             modifiers.push(`段数: ${segments}`);
         }
 
+        if (linkMode) {
+            modifiers.push(`链接: ${LINK_MODE_LABELS[linkMode]}`);
+        }
+
         return {
             displayText: this.getDisplayName(),
             modifierText: modifiers.length > 0 ? `(${modifiers.join(', ')})` : undefined
@@ -52,6 +80,10 @@ export class CurrentWorkingDirWidget implements Widget {
     }
 
     handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
+        if (action === CYCLE_LINK_ACTION) {
+            return this.cycleLinkMode(item);
+        }
+
         if (action === 'toggle-abbreviate-home') {
             const currentAbbreviateHome = item.metadata?.abbreviateHome === 'true';
             const newAbbreviateHome = !currentAbbreviateHome;
@@ -59,7 +91,6 @@ export class CurrentWorkingDirWidget implements Widget {
             if (newAbbreviateHome) {
                 // When enabling abbreviateHome, disable fishStyle (mutually exclusive)
                 const { fishStyle, ...restMetadata } = item.metadata ?? {};
-                void fishStyle;
                 return {
                     ...item,
                     metadata: {
@@ -70,7 +101,6 @@ export class CurrentWorkingDirWidget implements Widget {
             } else {
                 // When disabling abbreviateHome
                 const { abbreviateHome, ...restMetadata } = item.metadata ?? {};
-                void abbreviateHome;
 
                 return {
                     ...item,
@@ -87,8 +117,6 @@ export class CurrentWorkingDirWidget implements Widget {
             if (newFishStyle) {
                 // When enabling fish-style, clear segments and abbreviateHome (mutually exclusive)
                 const { segments, abbreviateHome, ...restMetadata } = item.metadata ?? {};
-                void segments;
-                void abbreviateHome;
                 return {
                     ...item,
                     metadata: {
@@ -97,9 +125,9 @@ export class CurrentWorkingDirWidget implements Widget {
                     }
                 };
             } else {
-                // When disabling fish-style
-                const { fishStyle, ...restMetadata } = item.metadata ?? {};
-                void fishStyle;
+                // When disabling fish-style, also drop a segment count saved
+                // next to it, so a count hidden behind fish style doesn't apply
+                const { fishStyle, segments, ...restMetadata } = item.metadata ?? {};
 
                 return {
                     ...item,
@@ -112,35 +140,28 @@ export class CurrentWorkingDirWidget implements Widget {
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        const segments = item.metadata?.segments ? parseInt(item.metadata.segments, 10) : undefined;
+        const segments = item.metadata?.segments ? Number.parseInt(item.metadata.segments, 10) : undefined;
         const fishStyle = item.metadata?.fishStyle === 'true';
         const abbreviateHome = item.metadata?.abbreviateHome === 'true';
         const symbolPrefix = formatSymbolPrefix(item, '');
+        const linkMode = this.getLinkMode(item);
 
         if (context.isPreview) {
             let previewPath: string;
+            const fullPreviewPath = '/Users/example/Documents/Projects/my-project';
 
             if (fishStyle) {
                 previewPath = '~/D/P/my-project';
-            } else if (abbreviateHome && segments && segments > 0) {
-                if (segments === 1) {
-                    previewPath = '~/.../my-project';
-                } else {
-                    previewPath = '~/.../Projects/my-project';
-                }
-            } else if (abbreviateHome) {
-                previewPath = '~/Documents/Projects/my-project';
-            } else if (segments && segments > 0) {
-                if (segments === 1) {
-                    previewPath = '.../project';
-                } else {
-                    previewPath = '.../example/project';
-                }
             } else {
-                previewPath = '/Users/example/Documents/Projects/my-project';
+                previewPath = abbreviateHome ? '~/Documents/Projects/my-project' : fullPreviewPath;
+                if (segments && segments > 0) {
+                    previewPath = this.keepLastSegments(previewPath, segments);
+                }
             }
 
-            return item.rawValue ? `${symbolPrefix}${previewPath}` : `${symbolPrefix}cwd: ${previewPath}`;
+            const text = `${symbolPrefix}${formatRawOrLabeledValue(item, this.getLabelPrefix(), previewPath)}`;
+            const linkTarget = linkMode ? this.buildLinkTarget(fullPreviewPath, linkMode) : null;
+            return linkTarget ? renderOsc8Link(linkTarget, text) : text;
         }
 
         const cwd = context.data?.cwd;
@@ -159,32 +180,21 @@ export class CurrentWorkingDirWidget implements Widget {
 
             // Then apply segments truncation
             if (segments && segments > 0) {
-                // Support both POSIX ('/') and Windows ('\\') separators; preserve original separator in output
-                const useBackslash = displayPath.includes('\\') && !displayPath.includes('/');
-                const outSep = useBackslash ? '\\' : '/';
-                const pathParts = displayPath.split(/[\\/]+/);
-
-                // Remove empty strings from splitting (e.g., leading slash or UNC leading separators)
-                const filteredParts = pathParts.filter(part => part !== '');
-
-                if (filteredParts.length > segments) {
-                    // Take the last N segments and join with the detected separator
-                    const selectedSegments = filteredParts.slice(-segments);
-                    // Preserve ~ prefix when combined with segments
-                    const prefix = displayPath.startsWith('~') ? `~${outSep}` : '';
-                    displayPath = prefix + '...' + outSep + selectedSegments.join(outSep);
-                }
+                displayPath = this.keepLastSegments(displayPath, segments);
             }
         }
 
-        return item.rawValue ? `${symbolPrefix}${displayPath}` : `${symbolPrefix}cwd: ${displayPath}`;
+        const text = `${symbolPrefix}${formatRawOrLabeledValue(item, this.getLabelPrefix(), displayPath)}`;
+        const linkTarget = linkMode ? this.buildLinkTarget(cwd, linkMode) : null;
+        return linkTarget ? renderOsc8Link(linkTarget, text) : text;
     }
 
     getCustomKeybinds(): CustomKeybind[] {
         return [
-            { key: 'h', label: '(h)ome ~ 缩写', action: 'toggle-abbreviate-home' },
+            { key: 'h', label: '(h)主目录 ~ 缩写', action: 'toggle-abbreviate-home' },
             { key: 's', label: '(s)路径段数', action: 'edit-segments' },
-            { key: 'f', label: '(f)ish 风格', action: 'toggle-fish-style' },
+            { key: 'f', label: '(f)fish 风格', action: 'toggle-fish-style' },
+            { key: 'l', label: '(l)链接模式', action: CYCLE_LINK_ACTION },
             getSymbolKeybind()
         ];
     }
@@ -198,6 +208,76 @@ export class CurrentWorkingDirWidget implements Widget {
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+
+    private getLinkMode(item: WidgetItem): CwdLinkMode | null {
+        const configuredMode = item.metadata?.[LINK_KEY];
+        return configuredMode && CWD_LINK_MODES.includes(configuredMode as CwdLinkMode)
+            ? configuredMode as CwdLinkMode
+            : null;
+    }
+
+    private cycleLinkMode(item: WidgetItem): WidgetItem {
+        const currentMode = this.getLinkMode(item);
+        const currentIndex = currentMode ? CWD_LINK_MODES.indexOf(currentMode) : -1;
+        const nextMode = currentIndex === CWD_LINK_MODES.length - 1
+            ? null
+            : (CWD_LINK_MODES[currentIndex + 1] ?? null);
+        const {
+            [LINK_KEY]: removedLink,
+            ...restMetadata
+        } = item.metadata ?? {};
+
+        return {
+            ...item,
+            metadata: nextMode
+                ? { ...restMetadata, [LINK_KEY]: nextMode }
+                : (Object.keys(restMetadata).length > 0 ? restMetadata : undefined)
+        };
+    }
+
+    private buildLinkTarget(path: string, linkMode: CwdLinkMode): string | null {
+        try {
+            if (linkMode === 'file') {
+                return buildFileUrl(path);
+            }
+
+            return this.isAbsoluteFilePath(path)
+                ? buildIdeFileUrl(path, linkMode satisfies IdeLinkMode)
+                : null;
+        } catch {
+            // The cwd comes from session input. A malformed Unicode path should
+            // keep the widget visible without enabling a broken link.
+            return null;
+        }
+    }
+
+    private isAbsoluteFilePath(path: string): boolean {
+        return path.startsWith('/')
+            || /^[A-Za-z]:[\\/]/.test(path)
+            || /^\\\\[^\\]/.test(path);
+    }
+
+    private keepLastSegments(path: string, segments: number): string {
+        // Support both POSIX ('/') and Windows ('\\') separators; preserve original separator in output
+        const useBackslash = path.includes('\\') && !path.includes('/');
+        const outSep = useBackslash ? '\\' : '/';
+        const pathParts = path.split(/[\\/]+/);
+
+        // Remove empty strings from splitting (e.g., leading slash or UNC leading separators)
+        const filteredParts = pathParts.filter(part => part !== '');
+
+        // Preserve ~ prefix when combined with segments; it stands for the home
+        // directory, so it isn't one of the segments
+        const prefix = filteredParts[0] === '~' ? `~${outSep}` : '';
+        const pathSegments = prefix ? filteredParts.slice(1) : filteredParts;
+
+        if (pathSegments.length <= segments) {
+            return path;
+        }
+
+        // Take the last N segments and join with the detected separator
+        return prefix + '...' + outSep + pathSegments.slice(-segments).join(outSep);
+    }
 
     private abbreviateHomeDir(path: string): string {
         const homeDir = os.homedir();
@@ -216,15 +296,11 @@ export class CurrentWorkingDirWidget implements Widget {
     }
 
     private abbreviatePath(path: string): string {
-        const homeDir = os.homedir();
         const useBackslash = path.includes('\\') && !path.includes('/');
         const sep = useBackslash ? '\\' : '/';
 
-        // Replace home directory with ~
-        let normalizedPath = path;
-        if (path.startsWith(homeDir)) {
-            normalizedPath = '~' + path.slice(homeDir.length);
-        }
+        // Replace home directory with ~ (only on a path-segment boundary)
+        const normalizedPath = this.abbreviateHomeDir(path);
 
         // Split path into parts
         const parts = normalizedPath.split(/[\\/]+/).filter(part => part !== '');
@@ -235,22 +311,20 @@ export class CurrentWorkingDirWidget implements Widget {
                 return part;  // Keep full
             }
 
+            // Whole graphemes, so an emoji or accented letter isn't cut in half
+            const [first = '', second = ''] = getGraphemes(part);
+
             // Hidden directories keep the dot
-            if (part.startsWith('.') && part.length > 1) {
-                return '.' + (part[1] ?? '');
+            if (first === '.' && second !== '') {
+                return first + second;
             }
 
-            return part[0];  // Only first letter for others
+            return first;  // Only first letter for others
         });
 
-        // Rebuild path
-        if (normalizedPath.startsWith('~')) {
-            return abbreviated.join(sep);
-        } else if (normalizedPath.startsWith('/')) {
-            return sep + abbreviated.join(sep);
-        } else {
-            return abbreviated.join(sep);
-        }
+        // Rebuild path on its root: '/', or the '\\' or '//' of a UNC path
+        const root = /^[\\/]+/.exec(normalizedPath)?.[0] ?? '';
+        return root + abbreviated.join(sep);
     }
 }
 
@@ -260,19 +334,20 @@ const CurrentWorkingDirEditor: React.FC<WidgetEditorProps> = ({ widget, onComple
     useInput((input, key) => {
         if (action === 'edit-segments') {
             if (key.return) {
-                const segments = parseInt(segmentsInput, 10);
-                if (!isNaN(segments) && segments > 0) {
+                const segments = Number.parseInt(segmentsInput, 10);
+                if (!Number.isNaN(segments) && segments > 0) {
+                    // A segment count disables fishStyle (mutually exclusive)
+                    const { fishStyle, ...restMetadata } = widget.metadata ?? {};
                     onComplete({
                         ...widget,
                         metadata: {
-                            ...widget.metadata,
+                            ...restMetadata,
                             segments: segments.toString()
                         }
                     });
                 } else {
                     // Clear segments if blank or invalid
                     const { segments, ...restMetadata } = widget.metadata ?? {};
-                    void segments; // Intentionally unused
                     onComplete({
                         ...widget,
                         metadata: Object.keys(restMetadata).length > 0 ? restMetadata : undefined
@@ -292,14 +367,14 @@ const CurrentWorkingDirEditor: React.FC<WidgetEditorProps> = ({ widget, onComple
         return (
             <Box flexDirection='column'>
                 <Box>
-                    <Text>Enter number of segments to display (blank for full path): </Text>
+                    <Text>输入显示的路径段数（留空显示完整路径）： </Text>
                     <Text>{segmentsInput}</Text>
-                    <Text backgroundColor='gray' color='black'>{' '}</Text>
+                    <BlinkingCursor>{' '}</BlinkingCursor>
                 </Box>
-                <Text dimColor>Press Enter to save, ESC to cancel</Text>
+                <Text dimColor>按 Enter 保存，ESC 取消</Text>
             </Box>
         );
     }
 
-    return <Text>Unknown editor mode</Text>;
+    return <Text>未知编辑模式</Text>;
 };

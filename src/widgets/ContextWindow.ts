@@ -10,36 +10,41 @@ import {
     getContextConfig,
     getModelContextIdentifier
 } from '../utils/model-context';
+import { resolveNumberFormat } from '../utils/number-format';
 import { formatTokens } from '../utils/renderer';
+
+import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
+
+const LABEL = '窗口: ';
 
 export class ContextWindowWidget implements Widget {
     getDefaultColor(): string { return 'brightBlack'; }
     getDescription(): string { return '显示当前模型的上下文窗口总大小'; }
     getDisplayName(): string { return '上下文窗口'; }
     getCategory(): string { return '上下文'; }
+    getLabelPrefix(): string { return LABEL; }
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         return { displayText: this.getDisplayName() };
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
+        const format = resolveNumberFormat('token', item, settings);
         if (context.isPreview) {
-            return item.rawValue ? '200k' : '窗口: 200k';
+            const value = formatTokens(200000, format);
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), value);
         }
 
-        let total = getContextWindowSize(context.data);
-
-        if (total === null) {
-            const modelIdentifier = getModelContextIdentifier(context.data?.model);
-            total = getContextConfig(modelIdentifier).maxTokens;
-        }
+        const modelIdentifier = getModelContextIdentifier(context.data?.model);
+        const total = getContextConfig(modelIdentifier, getContextWindowSize(context.data)).maxTokens;
 
         if (total <= 0) {
             return null;
         }
 
-        return item.rawValue ? formatTokens(total) : `窗口: ${formatTokens(total)}`;
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(), formatTokens(total, format));
     }
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

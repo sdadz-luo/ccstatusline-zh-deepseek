@@ -1,69 +1,30 @@
 import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
+    WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
-import {
-    isInsideJjRepo,
-    runJjArgs
-} from '../utils/jj';
+import { runJjArgs } from '../utils/jj';
 
-export class JjRevisionWidget implements Widget {
+import { JjWidgetBase } from './shared/jj-widget-base';
+import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
+import {
+    formatSymbolPrefix,
+    getSymbolKeybind,
+    renderSymbolOverrideEditor
+} from './shared/symbol-override';
+
+const DEFAULT_SYMBOL = '';
+
+export class JjRevisionWidget extends JjWidgetBase {
+    protected readonly previewValue = 'kkmpptxz';
+    protected readonly noJjText = '无 JJ';
+
     getDefaultColor(): string { return 'green'; }
     getDescription(): string { return '显示当前 Jujutsu 变更 ID（短）'; }
     getDisplayName(): string { return 'JJ 修订'; }
-    getCategory(): string { return 'Jujutsu'; }
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        const hideNoJj = item.metadata?.hideNoJj === 'true';
-        const modifiers: string[] = [];
 
-        if (hideNoJj) {
-            modifiers.push('隐藏「无 JJ」');
-        }
-
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: modifiers.length > 0 ? `(${modifiers.join(', ')})` : undefined
-        };
-    }
-
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        if (action === 'toggle-nojj') {
-            const currentState = item.metadata?.hideNoJj === 'true';
-            return {
-                ...item,
-                metadata: {
-                    ...item.metadata,
-                    hideNoJj: (!currentState).toString()
-                }
-            };
-        }
-        return null;
-    }
-
-    render(item: WidgetItem, context: RenderContext, _settings: Settings): string | null {
-        const hideNoJj = item.metadata?.hideNoJj === 'true';
-
-        if (context.isPreview) {
-            return item.rawValue ? 'kkmpptxz' : ' kkmpptxz';
-        }
-
-        if (!isInsideJjRepo(context)) {
-            return hideNoJj ? null : ' no jj';
-        }
-
-        const changeId = this.getJjRevision(context);
-        if (changeId) {
-            return item.rawValue ? changeId : ` ${changeId}`;
-        }
-
-        return hideNoJj ? null : ' no jj';
-    }
-
-    private getJjRevision(context: RenderContext): string | null {
+    protected getValue(context: RenderContext): string | null {
         return runJjArgs([
             'log',
             '--no-graph',
@@ -74,12 +35,21 @@ export class JjRevisionWidget implements Widget {
         ], context);
     }
 
+    protected formatValue(item: WidgetItem, changeId: string): string {
+        return formatRawOrLabeledValue(item, formatSymbolPrefix(item, DEFAULT_SYMBOL), changeId);
+    }
+
+    protected override formatPlaceholder(item: WidgetItem, text: string): string {
+        return `${formatSymbolPrefix(item, DEFAULT_SYMBOL)}${text}`;
+    }
+
     getCustomKeybinds(): CustomKeybind[] {
-        return [
-            { key: 'h', label: '(h)隐藏「无 JJ」提示', action: 'toggle-nojj' }
-        ];
+        return [getSymbolKeybind()];
+    }
+
+    renderEditor(props: WidgetEditorProps) {
+        return renderSymbolOverrideEditor(props, DEFAULT_SYMBOL);
     }
 
     supportsRawValue(): boolean { return true; }
-    supportsColors(): boolean { return true; }
 }

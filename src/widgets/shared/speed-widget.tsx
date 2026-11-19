@@ -6,14 +6,17 @@ import {
 import React, { useState } from 'react';
 
 import type { RenderContext } from '../../types/RenderContext';
+import type { Settings } from '../../types/Settings';
 import type { SpeedMetrics } from '../../types/SpeedMetrics';
 import type {
     CustomKeybind,
+    HideableState,
     WidgetEditorDisplay,
     WidgetEditorProps,
     WidgetItem
 } from '../../types/Widget';
 import { shouldInsertInput } from '../../utils/input-guards';
+import { resolveNumberFormat } from '../../utils/number-format';
 import {
     calculateOutputSpeed,
     calculateTotalSpeed,
@@ -28,35 +31,39 @@ import {
     withWidgetSpeedWindowSeconds
 } from '../../utils/speed-window';
 
+import { BlinkingCursor } from './BlinkingCursor';
 import { makeModifierText } from './editor-display';
+import { isHidden } from './hideable';
 import { formatRawOrLabeledValue } from './raw-or-labeled';
 
 export type SpeedWidgetKind = 'output' | 'total';
 
 const WINDOW_EDITOR_ACTION = 'edit-window';
 
+const NO_DATA_HIDEABLE_STATE: HideableState = { key: 'no-data', label: '无速度数据时（—）' };
+
 interface SpeedWidgetKindConfig {
     label: string;
     displayName: string;
     description: string;
-    sessionPreview: string;
-    windowedPreview: string;
+    sessionPreview: number;
+    windowedPreview: number;
 }
 
 const SPEED_WIDGET_CONFIG: Record<SpeedWidgetKind, SpeedWidgetKindConfig> = {
     output: {
         label: '输出: ',
         displayName: '输出速度',
-        description: '解码速度：输出 Token ÷ 生成时长（已剔除首字延迟与工具等待；无首字样本的请求按会话中位数估算）。可选窗口：0-120 秒（0 = 全会话平均）。',
-        sessionPreview: '42.5 t/s',
-        windowedPreview: '26.8 t/s'
+        description: '解码速度：输出 Token ÷ 生成时长（已剔除首字延迟与工具等待；无首字样本的请求按窗口内中位数估算）。可选窗口：0-3600 秒（0 = 全会话平均）。',
+        sessionPreview: 42.5,
+        windowedPreview: 26.8
     },
     total: {
         label: '合计: ',
         displayName: '总速度',
-        description: '解码口径的总 Token 速度：输入+输出 ÷ 生成时长（与输出速度同分母）。可选窗口：0-120 秒（0 = 全会话平均）。',
-        sessionPreview: '127.7 t/s',
-        windowedPreview: '58.3 t/s'
+        description: '解码口径的总 Token 速度：输入+输出 ÷ 生成时长（与输出速度同分母）。可选窗口：0-3600 秒（0 = 全会话平均）。',
+        sessionPreview: 127.7,
+        windowedPreview: 58.3
     }
 };
 
@@ -80,6 +87,10 @@ export function getSpeedWidgetDisplayName(kind: SpeedWidgetKind): string {
     return SPEED_WIDGET_CONFIG[kind].displayName;
 }
 
+export function getSpeedWidgetLabel(kind: SpeedWidgetKind): string {
+    return SPEED_WIDGET_CONFIG[kind].label;
+}
+
 export function getSpeedWidgetDescription(kind: SpeedWidgetKind): string {
     return SPEED_WIDGET_CONFIG[kind].description;
 }
@@ -99,15 +110,15 @@ export function getSpeedWidgetEditorDisplay(kind: SpeedWidgetKind, item: WidgetI
 export function renderSpeedWidgetValue(
     kind: SpeedWidgetKind,
     item: WidgetItem,
-    context: RenderContext
+    context: RenderContext,
+    settings: Settings
 ): string | null {
     const config = SPEED_WIDGET_CONFIG[kind];
-    const previewValue = isWidgetSpeedWindowEnabled(item)
-        ? config.windowedPreview
-        : config.sessionPreview;
+    const format = resolveNumberFormat('speed', item, settings);
 
     if (context.isPreview) {
-        return formatRawOrLabeledValue(item, config.label, previewValue);
+        const previewValue = isWidgetSpeedWindowEnabled(item) ? config.windowedPreview : config.sessionPreview;
+        return formatRawOrLabeledValue(item, config.label, formatSpeed(previewValue, format));
     }
 
     const metrics = getSpeedMetricsForWidget(item, context);
@@ -115,8 +126,16 @@ export function renderSpeedWidgetValue(
         return null;
     }
 
-    const valueText = formatSpeed(calculateSpeed(kind, metrics));
-    return formatRawOrLabeledValue(item, config.label, valueText);
+    const speed = calculateSpeed(kind, metrics);
+    if (speed === null && isHidden(item, NO_DATA_HIDEABLE_STATE.key)) {
+        return null;
+    }
+
+    return formatRawOrLabeledValue(item, config.label, formatSpeed(speed, format));
+}
+
+export function getSpeedWidgetHideableStates(): HideableState[] {
+    return [NO_DATA_HIDEABLE_STATE];
 }
 
 export function getSpeedWidgetCustomKeybinds(): CustomKeybind[] {
@@ -180,7 +199,7 @@ const SpeedWindowEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, on
                     {' '}
                 </Text>
                 <Text>{windowInput}</Text>
-                <Text backgroundColor='gray' color='black'>{' '}</Text>
+                <BlinkingCursor>{' '}</BlinkingCursor>
             </Box>
             <Text dimColor>0 表示禁用窗口模式并使用全会话平均值。按 Enter 保存，ESC 取消。</Text>
         </Box>

@@ -4,11 +4,13 @@ import type { RenderContext } from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
+    HideableState,
     Widget,
     WidgetEditorDisplay,
     WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
+import { resolveNumberFormat } from '../utils/number-format';
 import {
     formatUsageDuration,
     formatUsageResetAt,
@@ -17,6 +19,7 @@ import {
 } from '../utils/usage';
 
 import { makeModifierText } from './shared/editor-display';
+import { isHidden } from './shared/hideable';
 import {
     LOCALE_EDITOR_ACTION,
     renderUsageLocaleEditor
@@ -31,11 +34,12 @@ import {
     renderUsageTimezoneEditor
 } from './shared/timezone-editor';
 import {
+    USAGE_NO_DATA_HIDEABLE_STATE,
     cycleUsageDisplayMode,
+    formatUsageBar,
     getUsageDisplayMode,
     getUsageLocale,
     getUsageLocaleModifier,
-    getUsageProgressBarWidth,
     getUsageTimerCustomKeybinds,
     getUsageTimezone,
     getUsageTimezoneModifier,
@@ -44,6 +48,7 @@ import {
     isUsageDateMode,
     isUsageInverted,
     isUsageProgressMode,
+    isUsageSliderMode,
     isUsageWeekdayEnabled,
     toggleUsageCompact,
     toggleUsageDateMode,
@@ -52,12 +57,8 @@ import {
     toggleUsageWeekday
 } from './shared/usage-display';
 
-function makeTimerProgressBar(percent: number, width: number): string {
-    const clampedPercent = Math.max(0, Math.min(100, percent));
-    const filledWidth = Math.floor((clampedPercent / 100) * width);
-    const emptyWidth = width - filledWidth;
-    return '█'.repeat(filledWidth) + '░'.repeat(emptyWidth);
-}
+const LABEL = '周重置: ';
+const BAR_LABEL = '周重置 ';
 
 const WEEKLY_PREVIEW_DURATION_MS = 36.5 * 60 * 60 * 1000;
 const WEEKLY_RESET_PREVIEW_AT = '2026-03-15T08:30:00.000Z';
@@ -74,19 +75,26 @@ function toggleWeeklyResetHoursOnly(item: WidgetItem): WidgetItem {
 function getWeeklyResetModifierText(item: WidgetItem): string | undefined {
     const displayMode = getUsageDisplayMode(item);
     const dateMode = isUsageDateMode(item);
+    const isBarMode = isUsageProgressMode(displayMode) || isUsageSliderMode(displayMode);
     const modifiers: string[] = [];
 
     if (displayMode === 'progress') {
         modifiers.push('长进度条');
     } else if (displayMode === 'progress-short') {
         modifiers.push('中进度条');
+    } else if (displayMode === 'slider') {
+        modifiers.push('短进度条');
+    } else if (displayMode === 'slider-only') {
+        modifiers.push('仅短进度条');
+    } else if (displayMode === 'line') {
+        modifiers.push('细线进度条');
     }
 
     if (isUsageInverted(item)) {
         modifiers.push('反转');
     }
 
-    if (!isUsageProgressMode(displayMode)) {
+    if (!isBarMode) {
         if (isUsageCompact(item)) {
             modifiers.push('紧凑');
         }
@@ -107,12 +115,12 @@ function getWeeklyResetModifierText(item: WidgetItem): string | undefined {
     }
 
     const timezoneModifier = getUsageTimezoneModifier(item);
-    if (!isUsageProgressMode(displayMode) && dateMode && timezoneModifier) {
+    if (!isBarMode && dateMode && timezoneModifier) {
         modifiers.push(timezoneModifier);
     }
 
     const localeModifier = getUsageLocaleModifier(item);
-    if (!isUsageProgressMode(displayMode) && dateMode && localeModifier) {
+    if (!isBarMode && dateMode && localeModifier) {
         modifiers.push(localeModifier);
     }
 
@@ -124,6 +132,10 @@ export class WeeklyResetTimerWidget implements Widget {
     getDescription(): string { return '显示周用量重置倒计时'; }
     getDisplayName(): string { return '周重置计时'; }
     getCategory(): string { return '用量'; }
+    getLabelPrefix(item: WidgetItem): string {
+        const displayMode = getUsageDisplayMode(item);
+        return isUsageProgressMode(displayMode) || isUsageSliderMode(displayMode) ? BAR_LABEL : LABEL;
+    }
 
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         return {
@@ -132,9 +144,13 @@ export class WeeklyResetTimerWidget implements Widget {
         };
     }
 
+    getHideableStates(): HideableState[] {
+        return [USAGE_NO_DATA_HIDEABLE_STATE];
+    }
+
     handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
         if (action === 'toggle-progress') {
-            return cycleUsageDisplayMode(item, ['compact', 'hours', 'absolute']);
+            return cycleUsageDisplayMode(item, ['compact', 'hours', 'absolute'], true);
         }
 
         if (action === 'toggle-invert') {
@@ -165,19 +181,18 @@ export class WeeklyResetTimerWidget implements Widget {
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        const displayMode = getUsageDisplayMode(item);
         const inverted = isUsageInverted(item);
         const compact = isUsageCompact(item);
         const dateMode = isUsageDateMode(item);
         const useDays = !isWeeklyResetHoursOnly(item);
+        const format = resolveNumberFormat('percent', item, settings);
 
         if (context.isPreview) {
             const previewPercent = inverted ? 90.0 : 10.0;
 
-            if (isUsageProgressMode(displayMode)) {
-                const barWidth = getUsageProgressBarWidth(displayMode);
-                const progressBar = makeTimerProgressBar(previewPercent, barWidth);
-                return formatRawOrLabeledValue(item, '周重置 ', `[${progressBar}] ${previewPercent.toFixed(1)}%`);
+            const bar = formatUsageBar(item, previewPercent, format);
+            if (bar !== null) {
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), bar);
             }
 
             if (dateMode) {
@@ -193,29 +208,30 @@ export class WeeklyResetTimerWidget implements Widget {
                 const fallback = weekday
                     ? (compact ? 'Sun 08:30Z' : 'Sun 08:30 UTC')
                     : (compact ? '03-15 08:30Z' : '2026-03-15 08:30 UTC');
-                return formatRawOrLabeledValue(item, '周重置: ', resetAt ?? fallback);
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), resetAt ?? fallback);
             }
 
-            return formatRawOrLabeledValue(item, '周重置: ', formatUsageDuration(WEEKLY_PREVIEW_DURATION_MS, compact, useDays));
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), formatUsageDuration(WEEKLY_PREVIEW_DURATION_MS, compact, useDays));
         }
 
         const usageData = context.usageData ?? {};
         const window = resolveWeeklyUsageWindow(usageData);
 
         if (!window) {
+            if (isHidden(item, USAGE_NO_DATA_HIDEABLE_STATE.key)) {
+                return null;
+            }
+
             if (usageData.error) {
                 return getUsageErrorMessage(usageData.error);
             }
 
-            return formatRawOrLabeledValue(item, '周重置: ', item.rawValue ? USAGE_TIMER_LOADING_MESSAGE : '[加载中]');
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), item.rawValue ? USAGE_TIMER_LOADING_MESSAGE : '[加载中]');
         }
 
-        if (isUsageProgressMode(displayMode)) {
-            const barWidth = getUsageProgressBarWidth(displayMode);
-            const percent = inverted ? window.remainingPercent : window.elapsedPercent;
-            const progressBar = makeTimerProgressBar(percent, barWidth);
-            const percentage = percent.toFixed(1);
-            return formatRawOrLabeledValue(item, '周重置 ', `[${progressBar}] ${percentage}%`);
+        const bar = formatUsageBar(item, inverted ? window.remainingPercent : window.elapsedPercent, format);
+        if (bar !== null) {
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), bar);
         }
 
         if (dateMode) {
@@ -223,12 +239,12 @@ export class WeeklyResetTimerWidget implements Widget {
             const locale = getUsageLocale(item);
             const resetAt = formatUsageResetAt(usageData.weeklyResetAt, compact, timezone, locale, isUsage12HourClock(item), isUsageWeekdayEnabled(item));
             if (resetAt) {
-                return formatRawOrLabeledValue(item, '周重置: ', resetAt);
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), resetAt);
             }
         }
 
         const remainingTime = formatUsageDuration(window.remainingMs, compact, useDays);
-        return formatRawOrLabeledValue(item, '周重置: ', remainingTime);
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(item), remainingTime);
     }
 
     getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {
@@ -240,8 +256,10 @@ export class WeeklyResetTimerWidget implements Widget {
             includeTimezone: true
         });
 
-        if (!item || (!isUsageProgressMode(getUsageDisplayMode(item)) && !isUsageDateMode(item))) {
-            keybinds.push({ key: 'h', label: '(h)仅小时', action: 'toggle-hours' });
+        const mode = item ? getUsageDisplayMode(item) : 'time';
+        const isBarMode = isUsageProgressMode(mode) || isUsageSliderMode(mode);
+        if (!item || (!isBarMode && !isUsageDateMode(item))) {
+            keybinds.push({ key: 'o', label: '(o)仅小时', action: 'toggle-hours' });
         }
 
         return keybinds;
@@ -261,4 +279,5 @@ export class WeeklyResetTimerWidget implements Widget {
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

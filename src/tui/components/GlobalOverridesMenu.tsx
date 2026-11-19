@@ -7,6 +7,12 @@ import React, { useState } from 'react';
 
 import { getColorLevelString } from '../../types/ColorLevel';
 import {
+    NUMBER_KINDS,
+    type GlobalNumberFormat,
+    type NumberFormat,
+    type NumberKind
+} from '../../types/NumberFormat';
+import {
     DefaultPaddingSideSchema,
     type Settings
 } from '../../types/Settings';
@@ -17,9 +23,49 @@ import {
     getColorDisplayName
 } from '../../utils/colors';
 import { GRADIENT_PRESET_NAMES } from '../../utils/gradient';
-import { shouldInsertInput } from '../../utils/input-guards';
+import {
+    getPlainInput,
+    shouldInsertInput
+} from '../../utils/input-guards';
+import {
+    NUMBER_STYLE_LABELS,
+    getNextNumberStyle
+} from '../../utils/number-format';
 
 import { ConfirmDialog } from './ConfirmDialog';
+
+const NUMBER_KIND_LABELS: Record<NumberKind, string> = {
+    token: '令牌',
+    speed: '速度',
+    percent: '占比',
+    memory: '内存',
+    cost: '费用'
+};
+const NUMBER_FORMAT_KIND_WIDTH = Math.max(...Object.values(NUMBER_KIND_LABELS).map(label => label.length));
+
+// Cycle a number kind's global style: default (precise) -> compact -> whole -> default.
+// A global style forces that kind across all widgets (see resolveNumberFormat).
+function cycleGlobalNumberStyle(settings: Settings, kind: NumberKind): Settings {
+    const current = settings.numberFormat?.[kind]?.style;
+    const nextStyle = getNextNumberStyle(current);
+
+    const kindFormat: NumberFormat = { ...settings.numberFormat?.[kind] };
+    if (nextStyle === undefined) {
+        delete kindFormat.style;
+    } else {
+        kindFormat.style = nextStyle;
+    }
+
+    const { [kind]: removedKind, ...restGlobal } = settings.numberFormat ?? {};
+    const nextGlobal: GlobalNumberFormat = Object.keys(kindFormat).length > 0
+        ? { ...restGlobal, [kind]: kindFormat }
+        : restGlobal;
+
+    return {
+        ...settings,
+        numberFormat: Object.keys(nextGlobal).length > 0 ? nextGlobal : undefined
+    };
+}
 
 export interface GlobalOverridesMenuProps {
     settings: Settings;
@@ -36,6 +82,8 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
     const [inheritColors, setInheritColors] = useState(settings.inheritSeparatorColors);
     const [globalBold, setGlobalBold] = useState(settings.globalBold);
     const [minimalistMode, setMinimalistMode] = useState(settings.minimalistMode);
+    const [numberFormatMode, setNumberFormatMode] = useState(false);
+    const [numberFormatKindIndex, setNumberFormatKindIndex] = useState(0);
     const [gradientMode, setGradientMode] = useState(false);
     const [gradientIndex, setGradientIndex] = useState(0);
     const [gradientCustomStep, setGradientCustomStep] = useState<'start' | 'end' | null>(null);
@@ -55,6 +103,7 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
     const currentFgIndex = fgColors.indexOf(settings.overrideForegroundColor ?? 'none');
 
     useInput((input, key) => {
+        const shortcut = getPlainInput(input, key);
         if (editingPadding) {
             if (key.return) {
                 const updatedSettings = {
@@ -162,14 +211,27 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     setGradientCustomStep('start');
                 }
             }
+        } else if (numberFormatMode) {
+            if (key.escape) {
+                setNumberFormatMode(false);
+            } else if (key.upArrow) {
+                setNumberFormatKindIndex((numberFormatKindIndex - 1 + NUMBER_KINDS.length) % NUMBER_KINDS.length);
+            } else if (key.downArrow) {
+                setNumberFormatKindIndex((numberFormatKindIndex + 1) % NUMBER_KINDS.length);
+            } else if (key.leftArrow || key.rightArrow) {
+                const kind = NUMBER_KINDS[numberFormatKindIndex];
+                if (kind) {
+                    onUpdate(cycleGlobalNumberStyle(settings, kind));
+                }
+            }
         } else {
             if (key.escape) {
                 onBack();
-            } else if (input === 'p' || input === 'P') {
+            } else if (shortcut === 'p' || shortcut === 'P') {
                 setEditingPadding(true);
-            } else if ((input === 's' || input === 'S') && !isPowerlineEnabled && !key.ctrl) {
+            } else if ((shortcut === 's' || shortcut === 'S') && !isPowerlineEnabled) {
                 setEditingSeparator(true);
-            } else if ((input === 'i' || input === 'I') && !isPowerlineEnabled) {
+            } else if ((shortcut === 'i' || shortcut === 'I') && !isPowerlineEnabled) {
                 const newInheritColors = !inheritColors;
                 setInheritColors(newInheritColors);
                 const updatedSettings = {
@@ -177,7 +239,7 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     inheritSeparatorColors: newInheritColors
                 };
                 onUpdate(updatedSettings);
-            } else if ((input === 'b' || input === 'B') && !isPowerlineEnabled) {
+            } else if ((shortcut === 'b' || shortcut === 'B') && !isPowerlineEnabled) {
                 // Cycle through background colors
                 const nextIndex = (currentBgIndex + 1) % bgColors.length;
                 const nextBgColor = bgColors[nextIndex];
@@ -186,14 +248,14 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     overrideBackgroundColor: nextBgColor === 'none' ? undefined : nextBgColor
                 };
                 onUpdate(updatedSettings);
-            } else if ((input === 'c' || input === 'C') && !isPowerlineEnabled) {
+            } else if ((shortcut === 'c' || shortcut === 'C') && !isPowerlineEnabled) {
                 // Clear override background color
                 const updatedSettings = {
                     ...settings,
                     overrideBackgroundColor: undefined
                 };
                 onUpdate(updatedSettings);
-            } else if (input === 'o' || input === 'O') {
+            } else if (shortcut === 'o' || shortcut === 'O') {
                 // Toggle global bold
                 const newGlobalBold = !globalBold;
                 setGlobalBold(newGlobalBold);
@@ -202,7 +264,7 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     globalBold: newGlobalBold
                 };
                 onUpdate(updatedSettings);
-            } else if (input === 'm' || input === 'M') {
+            } else if (shortcut === 'm' || shortcut === 'M') {
                 // Toggle minimalist mode
                 const newMinimalistMode = !minimalistMode;
                 setMinimalistMode(newMinimalistMode);
@@ -211,7 +273,10 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     minimalistMode: newMinimalistMode
                 };
                 onUpdate(updatedSettings);
-            } else if (input === 'f' || input === 'F') {
+            } else if (shortcut === 'n' || shortcut === 'N') {
+                setNumberFormatMode(true);
+                setNumberFormatKindIndex(0);
+            } else if (shortcut === 'f' || shortcut === 'F') {
                 // Cycle through foreground colors
                 const nextIndex = (currentFgIndex + 1) % fgColors.length;
                 const nextFgColor = fgColors[nextIndex];
@@ -220,21 +285,21 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     overrideForegroundColor: nextFgColor === 'none' ? undefined : nextFgColor
                 };
                 onUpdate(updatedSettings);
-            } else if (input === 'g' || input === 'G') {
+            } else if (shortcut === 'g' || shortcut === 'G') {
                 // Enter gradient selection mode
                 setGradientMode(true);
                 setGradientIndex(0);
                 setGradientCustomStep(null);
                 setGradientStartHex('');
                 setGradientHexInput('');
-            } else if (input === 'x' || input === 'X') {
+            } else if (shortcut === 'x' || shortcut === 'X') {
                 // Clear override foreground color
                 const updatedSettings = {
                     ...settings,
                     overrideForegroundColor: undefined
                 };
                 onUpdate(updatedSettings);
-            } else if (input === 'd' || input === 'D') {
+            } else if (shortcut === 'd' || shortcut === 'D') {
                 // Cycle through padding sides: both -> left -> right -> both
                 const paddingSides = DefaultPaddingSideSchema.options;
                 const currentIndex = paddingSides.indexOf(settings.defaultPaddingSide);
@@ -248,18 +313,46 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
         }
     });
 
+    if (numberFormatMode) {
+        return (
+            <Box flexDirection='column'>
+                <Text bold>全局数值格式</Text>
+                <Box marginTop={1}>
+                    <Text dimColor>↑↓ 选择数值类型，←→ 切换格式，ESC 返回</Text>
+                </Box>
+                <Box marginTop={1} flexDirection='column'>
+                    {NUMBER_KINDS.map((kind, idx) => {
+                        const style = settings.numberFormat?.[kind]?.style;
+                        return (
+                            <Text key={kind} color={idx === numberFormatKindIndex ? 'cyan' : undefined}>
+                                {idx === numberFormatKindIndex ? '▶ ' : '  '}
+                                {NUMBER_KIND_LABELS[kind].padStart(NUMBER_FORMAT_KIND_WIDTH)}
+                                {': '}
+                                {style ? NUMBER_STYLE_LABELS[style] : '固定小数（默认）'}
+                            </Text>
+                        );
+                    })}
+                </Box>
+                <Box marginTop={1} flexDirection='column'>
+                    <Text dimColor>固定小数保留末尾的零（1.0M），紧凑格式去掉末尾的零（1M / 1.1M），整数不显示小数（1M）。</Text>
+                    <Text dimColor>全局格式会覆盖所有组件中同类数值的设置。小数位数可在组件配置或 settings.json 中指定。</Text>
+                </Box>
+            </Box>
+        );
+    }
+
     if (gradientMode) {
         const level = getColorLevelString(settings.colorLevel);
 
         if (gradientCustomStep) {
             return (
                 <Box flexDirection='column'>
-                    <Text bold>Custom Gradient - Override FG Color</Text>
+                    <Text bold>自定义渐变 - 覆盖前景色</Text>
                     <Box marginTop={1} flexDirection='column'>
-                        <Text>{gradientCustomStep === 'start' ? 'Enter START hex color (without #):' : 'Enter END hex color (without #):'}</Text>
+                        <Text>{gradientCustomStep === 'start' ? '输入起始颜色的十六进制值（不含 #）：' : '输入结束颜色的十六进制值（不含 #）：'}</Text>
                         {gradientCustomStep === 'end' && (
                             <Text dimColor>
-                                Start: #
+                                起始颜色：#
                                 {gradientStartHex}
                             </Text>
                         )}
@@ -269,7 +362,7 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                             <Text dimColor>{gradientHexInput.length < 6 ? '_'.repeat(6 - gradientHexInput.length) : ''}</Text>
                         </Text>
                         <Text> </Text>
-                        <Text dimColor>Press Enter when done, ESC to go back</Text>
+                        <Text dimColor>按 Enter 确认，ESC 返回</Text>
                     </Box>
                 </Box>
             );
@@ -277,9 +370,9 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
 
         return (
             <Box flexDirection='column'>
-                <Text bold>Select Gradient - Override FG Color</Text>
+                <Text bold>选择渐变 - 覆盖前景色</Text>
                 <Box marginTop={1}>
-                    <Text dimColor>↑↓ to select, Enter to apply, ESC to cancel</Text>
+                    <Text dimColor>↑↓ 选择，Enter 应用，ESC 取消</Text>
                 </Box>
                 <Box marginTop={1} flexDirection='column'>
                     {GRADIENT_PRESET_NAMES.map((name, idx) => (
@@ -290,7 +383,7 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     ))}
                     <Text key='custom'>
                         {gradientIndex === GRADIENT_PRESET_NAMES.length ? '▶ ' : '  '}
-                        Custom (enter two hex stops)
+                        自定义（输入起止颜色的十六进制值）
                     </Text>
                 </Box>
             </Box>
@@ -373,9 +466,19 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                     </Box>
 
                     <Box>
+                        <Text>数值格式: </Text>
+                        <Text color='cyan'>{settings.numberFormat ? '已自定义' : '（默认）'}</Text>
+                        <Text dimColor> - 按 (n) 分类型配置</Text>
+                    </Box>
+
+                    <Box>
                         <Text>  默认内边距: </Text>
-                        <Text color='cyan'>{settings.defaultPadding ? `"${settings.defaultPadding}"` : '（无）'}</Text>
-                        <Text dimColor> - 按 (p) 编辑</Text>
+                        {/* One Text, because Ink measures a toned or joined emoji as
+                            several columns and a sibling Text would overwrite its end */}
+                        <Text>
+                            <Text color='cyan'>{settings.defaultPadding ? `"${settings.defaultPadding}"` : '（无）'}</Text>
+                            <Text dimColor> - 按 (p) 编辑</Text>
+                        </Text>
                     </Box>
 
                     <Box>
@@ -446,10 +549,11 @@ export const GlobalOverridesMenu: React.FC<GlobalOverridesMenuProps> = ({ settin
                         {isPowerlineEnabled ? (
                             <Text dimColor>[已禁用 - Powerline 激活中]</Text>
                         ) : (
-                            <>
+                            // One Text, as for Default Padding
+                            <Text>
                                 <Text color='cyan'>{settings.defaultSeparator ? `"${settings.defaultSeparator}"` : '（无）'}</Text>
                                 <Text dimColor> - 按 (s) 编辑</Text>
-                            </>
+                            </Text>
                         )}
                     </Box>
 

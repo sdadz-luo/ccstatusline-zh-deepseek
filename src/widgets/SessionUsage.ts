@@ -1,127 +1,31 @@
 import type { RenderContext } from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type {
-    CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
+    HideableState,
     WidgetItem
 } from '../types/Widget';
-import {
-    getUsageErrorMessage,
-    resolveUsageWindowWithFallback
-} from '../utils/usage';
 
-import { makeTimerProgressBar } from './shared/progress-bar';
-import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
+import { isHidden } from './shared/hideable';
 import {
-    cycleUsageDisplayMode,
-    formatUsagePercent,
-    getUsageDisplayMode,
-    getUsageDisplayModifierText,
-    getUsagePercentCustomKeybinds,
-    getUsageProgressBarWidth,
-    isUsageCursorEnabled,
-    isUsageInverted,
-    isUsageProgressMode,
-    isUsageSliderMode,
-    makeSliderBar,
-    toggleUsageCursor,
-    toggleUsageInverted
+    SESSION_AT_LIMIT_HIDEABLE_STATE,
+    isAtSessionLimit
 } from './shared/usage-display';
+import { UsagePercentWidget } from './shared/usage-percent-widget';
 
-export class SessionUsageWidget implements Widget {
-    getDefaultColor(): string { return 'brightBlue'; }
-    getDescription(): string { return '显示每日/会话 API 用量百分比'; }
-    getDisplayName(): string { return '会话用量'; }
-    getCategory(): string { return '用量'; }
-
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: getUsageDisplayModifierText(item, { showUsageDirection: true })
-        };
+export class SessionUsageWidget extends UsagePercentWidget {
+    constructor() {
+        super('session');
     }
 
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        if (action === 'toggle-progress') {
-            return cycleUsageDisplayMode(item, [], true, true);
-        }
-
-        if (action === 'toggle-invert') {
-            return toggleUsageInverted(item);
-        }
-
-        if (action === 'toggle-cursor') {
-            return toggleUsageCursor(item);
-        }
-
-        return null;
+    override getHideableStates(): HideableState[] {
+        return [...super.getHideableStates(), SESSION_AT_LIMIT_HIDEABLE_STATE];
     }
 
-    render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        const displayMode = getUsageDisplayMode(item);
-        const inverted = isUsageInverted(item);
-        const showCursor = isUsageCursorEnabled(item);
-
-        if (context.isPreview) {
-            const previewPercent = 20;
-            const renderedPercent = inverted ? 100 - previewPercent : previewPercent;
-
-            if (isUsageProgressMode(displayMode)) {
-                const width = getUsageProgressBarWidth(displayMode);
-                const progressBar = makeTimerProgressBar(renderedPercent, width, showCursor ? { cursorPercent: 50 } : undefined);
-                const progressDisplay = `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`;
-                return formatRawOrLabeledValue(item, '会话: ', progressDisplay);
-            }
-
-            if (isUsageSliderMode(displayMode)) {
-                const slider = makeSliderBar(renderedPercent, undefined, showCursor ? { cursorPercent: 50 } : undefined);
-                const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
-                return formatRawOrLabeledValue(item, '会话: ', sliderDisplay);
-            }
-
-            return formatRawOrLabeledValue(item, '会话: ', `${formatUsagePercent(renderedPercent)}%`);
-        }
-
-        const data = context.usageData ?? {};
-        if (data.sessionUsage === undefined) {
-            if (data.error)
-                return getUsageErrorMessage(data.error);
+    override render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
+        // The preview keeps its sample
+        if (!context.isPreview && isHidden(item, SESSION_AT_LIMIT_HIDEABLE_STATE.key) && isAtSessionLimit(context)) {
             return null;
         }
-
-        const percent = Math.max(0, Math.min(100, data.sessionUsage));
-        const renderedPercent = inverted ? 100 - percent : percent;
-        const getCursorOptions = (): { cursorPercent: number } | undefined => {
-            if (!showCursor) {
-                return undefined;
-            }
-
-            const window = resolveUsageWindowWithFallback(data, context.blockMetrics);
-            return window ? { cursorPercent: window.elapsedPercent } : undefined;
-        };
-
-        if (isUsageProgressMode(displayMode)) {
-            const width = getUsageProgressBarWidth(displayMode);
-
-            const progressBar = makeTimerProgressBar(renderedPercent, width, getCursorOptions());
-            const progressDisplay = `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`;
-            return formatRawOrLabeledValue(item, '会话: ', progressDisplay);
-        }
-
-        if (isUsageSliderMode(displayMode)) {
-            const slider = makeSliderBar(renderedPercent, undefined, getCursorOptions());
-            const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
-            return formatRawOrLabeledValue(item, '会话: ', sliderDisplay);
-        }
-
-        return formatRawOrLabeledValue(item, '会话: ', `${formatUsagePercent(renderedPercent)}%`);
+        return super.render(item, context, settings);
     }
-
-    getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {
-        return getUsagePercentCustomKeybinds(item);
-    }
-
-    supportsRawValue(): boolean { return true; }
-    supportsColors(item: WidgetItem): boolean { return true; }
 }

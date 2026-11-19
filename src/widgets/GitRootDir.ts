@@ -2,6 +2,7 @@ import type { RenderContext } from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
+    HideableState,
     Widget,
     WidgetEditorDisplay,
     WidgetEditorProps,
@@ -20,11 +21,9 @@ import {
 
 import { makeModifierText } from './shared/editor-display';
 import {
-    getHideNoGitKeybinds,
-    getHideNoGitModifierText,
-    handleToggleNoGitAction,
-    isHideNoGitEnabled
-} from './shared/git-no-git';
+    NO_GIT_HIDEABLE_STATE,
+    isHidden
+} from './shared/hideable';
 import {
     MAX_WIDTH_ACTION,
     applyMaxWidth,
@@ -39,7 +38,8 @@ const LEGACY_CURSOR_LINK_KEY = 'linkToCursor';
 const TOGGLE_LINK_ACTION = 'toggle-link';
 const IDE_LINK_LABELS: Record<IdeLinkMode, string> = {
     vscode: 'link-vscode',
-    cursor: 'link-cursor'
+    cursor: 'link-cursor',
+    zed: 'link-zed'
 };
 
 export class GitRootDirWidget implements Widget {
@@ -50,9 +50,6 @@ export class GitRootDirWidget implements Widget {
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         const ideLinkMode = this.getIdeLinkMode(item);
         const modifiers: string[] = [];
-        const noGitText = getHideNoGitModifierText(item);
-        if (noGitText)
-            modifiers.push('隐藏「无 Git」');
         if (ideLinkMode)
             modifiers.push(IDE_LINK_LABELS[ideLinkMode]);
         const maxWidthText = getMaxWidthModifier(item);
@@ -64,19 +61,24 @@ export class GitRootDirWidget implements Widget {
         };
     }
 
+    getHideableStates(): HideableState[] {
+        return [NO_GIT_HIDEABLE_STATE];
+    }
+
     handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
         if (action === TOGGLE_LINK_ACTION) {
             return this.cycleIdeLinkMode(item);
         }
-        return handleToggleNoGitAction(action, item);
+        return null;
     }
 
     render(item: WidgetItem, context: RenderContext, _settings: Settings): string | null {
-        const hideNoGit = isHideNoGitEnabled(item);
+        const hideNoGit = isHidden(item, NO_GIT_HIDEABLE_STATE.key);
         const ideLinkMode = this.getIdeLinkMode(item);
 
         if (context.isPreview) {
-            const name = 'my-repo';
+            // With a width limit, a sample long enough for the limit to show
+            const name = applyMaxWidth(item.maxWidth ? 'my-long-repository-name' : 'my-repo', item.maxWidth);
             return ideLinkMode ? renderOsc8Link(buildIdeFileUrl('/Users/example/my-repo', ideLinkMode), name) : name;
         }
 
@@ -103,16 +105,15 @@ export class GitRootDirWidget implements Widget {
     }
 
     private getRootDirName(rootDir: string): string {
-        const trimmedRootDir = rootDir.replace(/[\\/]+$/, '');
-        const normalizedRootDir = trimmedRootDir.length > 0 ? trimmedRootDir : rootDir;
-        const parts = normalizedRootDir.split(/[\\/]/).filter(Boolean);
+        // Splitting drops the empty parts that trailing separators leave. Only a
+        // path of separators alone, such as "/", has no part left and shows as is
+        const parts = rootDir.split(/[\\/]/).filter(Boolean);
         const lastPart = parts[parts.length - 1];
-        return lastPart && lastPart.length > 0 ? lastPart : normalizedRootDir;
+        return lastPart && lastPart.length > 0 ? lastPart : rootDir;
     }
 
     getCustomKeybinds(): CustomKeybind[] {
         return [
-            ...getHideNoGitKeybinds(),
             { key: 'l', label: '(l)IDE 链接', action: TOGGLE_LINK_ACTION },
             getMaxWidthKeybind()
         ];
@@ -150,9 +151,6 @@ export class GitRootDirWidget implements Widget {
             [LEGACY_CURSOR_LINK_KEY]: removedLegacyLink,
             ...restMetadata
         } = item.metadata ?? {};
-
-        void removedIdeLink;
-        void removedLegacyLink;
 
         return {
             ...item,

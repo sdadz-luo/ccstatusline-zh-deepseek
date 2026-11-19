@@ -85,6 +85,7 @@ describe('MonthlyUsageWidget', () => {
         expectedRawProgress: '[███████░░░░░░░░░] 42.1%',
         expectedRawTime: '42.1%',
         expectedTime: '月用量: 42.1%',
+        expectedWholePercentTime: '月用量: 42%',
         modifierItem: {
             id: 'monthly',
             type: 'monthly-usage',

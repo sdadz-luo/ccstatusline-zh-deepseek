@@ -1,17 +1,20 @@
+import type { NumberFormat } from '../../types/NumberFormat';
 import type {
     CustomKeybind,
     WidgetItem
 } from '../../types/Widget';
+import { formatPercent } from '../../utils/number-format';
 
+import { makeLineProgressBar } from './progress-bar';
 import { makeSliderBar } from './usage-display';
 
-export type ContextSliderMode = 'none' | 'slider' | 'slider-only';
+export type ContextSliderMode = 'none' | 'slider' | 'slider-only' | 'line';
 
 const SLIDER_TOGGLE_KEYBIND: CustomKeybind = { key: 'p', label: '(p)进度条切换', action: 'toggle-slider' };
 
 export function getContextSliderMode(item: WidgetItem): ContextSliderMode {
     const mode = item.metadata?.display;
-    if (mode === 'slider' || mode === 'slider-only') {
+    if (mode === 'slider' || mode === 'slider-only' || mode === 'line') {
         return mode;
     }
     return 'none';
@@ -23,7 +26,9 @@ export function cycleContextSliderMode(item: WidgetItem): WidgetItem {
         ? 'slider'
         : currentMode === 'slider'
             ? 'slider-only'
-            : 'none';
+            : currentMode === 'slider-only'
+                ? 'line'
+                : 'none';
 
     if (nextMode === 'none') {
         const nextMetadata = { ...(item.metadata ?? {}) };
@@ -43,13 +48,16 @@ export function cycleContextSliderMode(item: WidgetItem): WidgetItem {
     };
 }
 
-export function renderContextSlider(mode: ContextSliderMode, percent: number): string | null {
+export function renderContextSlider(mode: ContextSliderMode, percent: number, format: NumberFormat = {}): string | null {
     if (mode === 'none') {
         return null;
     }
+    if (mode === 'line') {
+        return `${makeLineProgressBar(percent)} ${formatPercent(percent, format)}`;
+    }
     const slider = makeSliderBar(percent);
     if (mode === 'slider') {
-        return `${slider} ${percent.toFixed(1)}%`;
+        return `${slider} ${formatPercent(percent, format)}`;
     }
     return slider;
 }
@@ -61,6 +69,9 @@ export function getContextSliderModifierText(item: WidgetItem): string | undefin
     }
     if (mode === 'slider-only') {
         return '(仅迷你进度条)';
+    }
+    if (mode === 'line') {
+        return '(细线进度条)';
     }
     return undefined;
 }

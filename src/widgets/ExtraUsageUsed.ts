@@ -1,67 +1,16 @@
-import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
-import type {
-    CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
-    WidgetItem
-} from '../types/Widget';
-import { getUsageErrorMessage } from '../utils/usage';
+import type { RenderUsageData } from '../types/RenderContext';
 
-import { formatUsageCurrency } from './shared/currency';
-import {
-    appendHideDisabledModifier,
-    getHideExtraUsageDisabledKeybind,
-    handleToggleExtraUsageDisabledAction,
-    isHideExtraUsageDisabledEnabled
-} from './shared/extra-usage-disabled';
-import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
+import { ExtraUsageAmountWidget } from './shared/extra-usage-amount-widget';
 
-export class ExtraUsageUsedWidget implements Widget {
-    getDefaultColor(): string { return 'green'; }
-    getDescription(): string { return '显示超额用量（按需计费）已消费金额'; }
+export class ExtraUsageUsedWidget extends ExtraUsageAmountWidget {
+    protected readonly label = '超额已用: ';
+    protected readonly previewDollars = 106;
+
+    getDescription(): string { return '显示超额用量的已消费金额（超出 Pro/Max 套餐额度的消费或 Enterprise 消费）'; }
     getDisplayName(): string { return '超额已用'; }
-    getCategory(): string { return '用量'; }
 
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: appendHideDisabledModifier(undefined, item)
-        };
-    }
-
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        return handleToggleExtraUsageDisabledAction(action, item);
-    }
-
-    render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        if (context.isPreview) {
-            return formatRawOrLabeledValue(item, '超额已用: ', '$106.00');
-        }
-
-        const data = context.usageData ?? {};
-        if (data.extraUsageEnabled === false) {
-            return isHideExtraUsageDisabledEnabled(item)
-                ? null
-                : formatRawOrLabeledValue(item, '超额已用: ', 'n/a');
-        }
-        if (data.extraUsageEnabled !== true || data.extraUsageUsed === undefined) {
-            if (data.error)
-                return getUsageErrorMessage(data.error);
-            return null;
-        }
-
+    protected getDollars(data: RenderUsageData): number | null {
         // extraUsageUsed is in cents
-        const usedDollars = data.extraUsageUsed / 100;
-        const formatted = formatUsageCurrency(usedDollars, data.extraUsageCurrency);
-
-        return formatRawOrLabeledValue(item, '超额已用: ', formatted);
+        return data.extraUsageUsed === undefined ? null : data.extraUsageUsed / 100;
     }
-
-    getCustomKeybinds(): CustomKeybind[] {
-        return [getHideExtraUsageDisabledKeybind()];
-    }
-
-    supportsRawValue(): boolean { return true; }
-    supportsColors(item: WidgetItem): boolean { return true; }
 }

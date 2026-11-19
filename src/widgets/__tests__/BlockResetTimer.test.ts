@@ -81,6 +81,26 @@ describe('BlockResetTimerWidget', () => {
         expect(render(widget, item, { usageData: {} })).toBe('重置 [███░░░░░░░░░░░░░] 20.0%');
     });
 
+    it('rounds the progress bar fill to the nearest cell', () => {
+        const widget = new BlockResetTimerWidget();
+        const item: WidgetItem = {
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'progress-short' }
+        };
+
+        mockResolveUsageWindowWithFallback.mockReturnValue({
+            sessionDurationMs: 18000000,
+            elapsedMs: 1800000,
+            remainingMs: 16200000,
+            elapsedPercent: 10,
+            remainingPercent: 90
+        });
+
+        // 10% of 16 cells is 1.6, past the half-cell mark, so the 2nd cell fills.
+        expect(render(widget, item, { usageData: {} })).toBe('重置 [██░░░░░░░░░░░░░░] 10.0%');
+    });
+
     it('returns usage error when no timer data is available', () => {
         const widget = new BlockResetTimerWidget();
 
@@ -97,6 +117,105 @@ describe('BlockResetTimerWidget', () => {
 
         expect(render(widget, { id: 'reset', type: 'reset-timer' }, { usageData: {} })).toBe('重置: [加载中]');
         expect(render(widget, { id: 'reset', type: 'reset-timer', rawValue: true }, { usageData: {} })).toBe('[Loading]');
+        expect(render(widget, { id: 'reset', type: 'reset-timer', metadata: { display: 'progress' } }, { usageData: {} })).toBe('重置 [加载中]');
+    });
+
+    it('declares the no-data and under-limit hideable states', () => {
+        expect(new BlockResetTimerWidget().getHideableStates().map(state => state.key)).toEqual(['no-data', 'under-limit']);
+    });
+
+    // One state covers both placeholders, since either means the same thing to
+    // a reader: the widget has nothing to report yet.
+    it.each([
+        ['a usage error', { error: 'timeout' as const }],
+        ['no data at all', {}]
+    ])('hides %s when the no-data state is enabled', (_label, usageData) => {
+        const widget = new BlockResetTimerWidget();
+
+        mockResolveUsageWindowWithFallback.mockReturnValue(null);
+        mockGetUsageErrorMessage.mockReturnValue('[超时]');
+
+        expect(render(widget, { id: 'reset', type: 'reset-timer', metadata: { hide: 'no-data' } }, { usageData })).toBeNull();
+    });
+
+    it('keeps both placeholders when the no-data state is off', () => {
+        const widget = new BlockResetTimerWidget();
+
+        mockResolveUsageWindowWithFallback.mockReturnValue(null);
+        mockGetUsageErrorMessage.mockReturnValue('[超时]');
+
+        expect(render(widget, { id: 'reset', type: 'reset-timer', metadata: { hide: '' } }, { usageData: {} })).toBe('重置: [加载中]');
+        expect(render(widget, { id: 'reset', type: 'reset-timer' }, { usageData: { error: 'timeout' } })).toBe('[超时]');
+    });
+
+    describe('under-limit hide state', () => {
+        const item: WidgetItem = { id: 'reset', type: 'reset-timer', metadata: { hide: 'under-limit' } };
+
+        beforeEach(() => {
+            mockResolveUsageWindowWithFallback.mockReturnValue({
+                sessionDurationMs: 18000000,
+                elapsedMs: 11820000,
+                remainingMs: 6180000,
+                elapsedPercent: 65.7,
+                remainingPercent: 34.3
+            });
+            mockFormatUsageDuration.mockReturnValue('1hr 43m');
+        });
+
+        // The raw percent decides, so 99.7% that a whole-number usage percent shows as
+        // "100%" still counts as under the limit.
+        it.each([
+            ['under 100%', { sessionUsage: 60 }],
+            ['just under 100%', { sessionUsage: 99.7 }],
+            ['unknown', {}],
+            ['unknown with a usage error', { error: 'timeout' as const }]
+        ])('hides the timer when the block\'s usage is %s', (_label, usageData) => {
+            expect(render(new BlockResetTimerWidget(), item, {
+                usageData,
+                data: { rate_limits: { five_hour: { used_percentage: 'sessionUsage' in usageData ? usageData.sessionUsage : undefined } } }
+            })).toBeNull();
+        });
+
+        it.each([
+            ['at 100%', 100],
+            ['over 100%', 100.4]
+        ])('shows the timer when the block\'s usage is %s', (_label, sessionUsage) => {
+            expect(render(new BlockResetTimerWidget(), item, {
+                usageData: { sessionUsage },
+                data: { rate_limits: { five_hour: { used_percentage: sessionUsage } } }
+            })).toBe('重置: 1hr 43m');
+        });
+
+        // The payload's percent comes from this session's last response, so the
+        // usage API's decides when there is one
+        it.each([
+            ['the API reaches 100% while the payload lags', { sessionUsage: 97, apiSessionUsage: 100 }, '重置: 1hr 43m'],
+            ['the API is under 100% after the payload reached it', { sessionUsage: 100, apiSessionUsage: 2 }, null]
+        ])('reads the usage API\'s percent over the payload\'s when %s', (_label, usageData, expected) => {
+            expect(render(new BlockResetTimerWidget(), item, {
+                usageData,
+                data: { rate_limits: { five_hour: { used_percentage: usageData.sessionUsage } } }
+            })).toBe(expected);
+        });
+
+        it('keeps showing the timer under 100% when the state is off', () => {
+            expect(render(new BlockResetTimerWidget(), { id: 'reset', type: 'reset-timer' }, { usageData: { sessionUsage: 60 } })).toBe('重置: 1hr 43m');
+        });
+
+        it('keeps the preview sample', () => {
+            const widget = new BlockResetTimerWidget();
+
+            expect(render(widget, item, { isPreview: true })).toBe(render(widget, { id: 'reset', type: 'reset-timer' }, { isPreview: true }));
+        });
+
+        it('hides rather than loads at 100% with no reset window when no-data is also on', () => {
+            mockResolveUsageWindowWithFallback.mockReturnValue(null);
+
+            expect(render(new BlockResetTimerWidget(), { ...item, metadata: { hide: 'no-data,under-limit' } }, {
+                usageData: { sessionUsage: 100 },
+                data: { rate_limits: { five_hour: { used_percentage: 100 } } }
+            })).toBeNull();
+        });
     });
 
     it('shows raw value without label in time mode', () => {
@@ -109,9 +228,9 @@ describe('BlockResetTimerWidget', () => {
             elapsedPercent: 25,
             remainingPercent: 75
         });
-        mockFormatUsageDuration.mockReturnValue('3hr 45m');
+        mockFormatUsageDuration.mockReturnValue('3时 45分');
 
-        expect(render(widget, { id: 'reset', type: 'reset-timer', rawValue: true }, { usageData: {} })).toBe('3hr 45m');
+        expect(render(widget, { id: 'reset', type: 'reset-timer', rawValue: true }, { usageData: {} })).toBe('3时 45分');
     });
 
     it('shows reset timestamp in date mode', () => {
@@ -131,6 +250,25 @@ describe('BlockResetTimerWidget', () => {
             { usageData: { sessionResetAt: '2026-03-12T08:30:00.000Z' } }
         )).toBe('重置: 2026-03-12 08:30 UTC');
         expect(mockFormatUsageResetAt).toHaveBeenCalledWith('2026-03-12T08:30:00.000Z', false, 'Asia/Tokyo', 'ja-JP', true);
+    });
+
+    it('shows the transcript block\'s reset as a timestamp when no reset time is reported', () => {
+        const widget = new BlockResetTimerWidget();
+        vi.useFakeTimers({ now: new Date('2026-03-12T06:15:00.000Z') });
+
+        try {
+            const blockMetrics = {
+                startTime: new Date('2026-03-12T05:00:00.000Z'),
+                lastActivity: new Date('2026-03-12T06:10:00.000Z')
+            };
+
+            expect(render(widget,
+                { id: 'reset', type: 'reset-timer', metadata: { absolute: 'true' } },
+                { usageData: {}, blockMetrics }
+            )).toBe('重置: 2026-03-12 10:00 UTC');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('shows configured timestamp settings in editor display only in timestamp mode', () => {
@@ -159,7 +297,7 @@ describe('BlockResetTimerWidget', () => {
             { key: 'p', label: '(p)进度条切换', action: 'toggle-progress' },
             { key: 's', label: '(s)短时间', action: 'toggle-compact' },
             { key: 't', label: '(t)时间戳', action: 'toggle-date' },
-            { key: 'h', label: '12/24 小时(h)', action: 'toggle-hour-format' },
+            { key: 'f', label: '12/24 小时(f)', action: 'toggle-hour-format' },
             { key: 'z', label: '时区(z)', action: 'edit-timezone' },
             { key: 'l', label: '(l)地区', action: 'edit-locale' }
         ]);
@@ -180,7 +318,108 @@ describe('BlockResetTimerWidget', () => {
         expect(cleared?.metadata?.hour12).toBe('false');
     });
 
+    it('renders slider bar with elapsed percentage', () => {
+        const widget = new BlockResetTimerWidget();
+        const item: WidgetItem = {
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider' }
+        };
+
+        mockResolveUsageWindowWithFallback.mockReturnValue({
+            sessionDurationMs: 18000000,
+            elapsedMs: 9000000,
+            remainingMs: 9000000,
+            elapsedPercent: 50,
+            remainingPercent: 50
+        });
+
+        expect(render(widget, item, { usageData: {} })).toBe('重置 ▓▓▓▓▓░░░░░ 50.0%');
+    });
+
+    it('renders slider-only bar without percentage', () => {
+        const widget = new BlockResetTimerWidget();
+        const item: WidgetItem = {
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider-only' }
+        };
+
+        mockResolveUsageWindowWithFallback.mockReturnValue({
+            sessionDurationMs: 18000000,
+            elapsedMs: 9000000,
+            remainingMs: 9000000,
+            elapsedPercent: 50,
+            remainingPercent: 50
+        });
+
+        expect(render(widget, item, { usageData: {} })).toBe('重置 ▓▓▓▓▓░░░░░');
+    });
+
+    it('renders inverted slider using remaining percent', () => {
+        const widget = new BlockResetTimerWidget();
+        const item: WidgetItem = {
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider', invert: 'true' }
+        };
+
+        mockResolveUsageWindowWithFallback.mockReturnValue({
+            sessionDurationMs: 18000000,
+            elapsedMs: 14400000,
+            remainingMs: 3600000,
+            elapsedPercent: 80,
+            remainingPercent: 20
+        });
+
+        expect(render(widget, item, { usageData: {} })).toBe('重置 ▓▓░░░░░░░░ 20.0%');
+    });
+
+    it('exposes invert keybind in slider mode', () => {
+        const widget = new BlockResetTimerWidget();
+
+        expect(widget.getCustomKeybinds({
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider' }
+        })).toEqual([
+            { key: 'p', label: '(p)进度条切换', action: 'toggle-progress' },
+            { key: 'v', label: '(v)反转填充', action: 'toggle-invert' }
+        ]);
+    });
+
+    it('shows 短进度条 modifier text in slider modes', () => {
+        const widget = new BlockResetTimerWidget();
+
+        expect(widget.getEditorDisplay({
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider' }
+        }).modifierText).toBe('(短进度条)');
+        expect(widget.getEditorDisplay({
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'slider-only' }
+        }).modifierText).toBe('(仅短进度条)');
+    });
+
+    it('does not show a 时间游标 carried over from a usage widget', () => {
+        // A usage bar's cursor metadata survives a type change in the picker,
+        // but this timer never draws a cursor
+        const widget = new BlockResetTimerWidget();
+
+        const modifierText = widget.getEditorDisplay({
+            id: 'reset',
+            type: 'reset-timer',
+            metadata: { display: 'progress', cursor: 'true' }
+        }).modifierText;
+
+        expect(modifierText).toContain('进度条');
+        expect(modifierText).not.toContain('时间游标');
+    });
+
     runUsageTimerEditorSuite({
+        supportsSliderMode: true,
         baseItem: { id: 'reset', type: 'reset-timer' },
         createWidget: () => new BlockResetTimerWidget(),
         expectedDisplayName: '时段重置计时',

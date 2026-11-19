@@ -4,11 +4,13 @@ import type { RenderContext } from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
+    HideableState,
     Widget,
     WidgetEditorDisplay,
     WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
+import { resolveNumberFormat } from '../utils/number-format';
 import {
     formatUsageDuration,
     formatUsageResetAt,
@@ -16,6 +18,7 @@ import {
     resolveUsageWindowWithFallback
 } from '../utils/usage';
 
+import { isHidden } from './shared/hideable';
 import {
     LOCALE_EDITOR_ACTION,
     renderUsageLocaleEditor
@@ -26,39 +29,43 @@ import {
     renderUsageTimezoneEditor
 } from './shared/timezone-editor';
 import {
+    SESSION_UNDER_LIMIT_HIDEABLE_STATE,
+    USAGE_NO_DATA_HIDEABLE_STATE,
     cycleUsageDisplayMode,
+    formatUsageBar,
     getUsageDisplayMode,
     getUsageDisplayModifierText,
     getUsageLocale,
-    getUsageProgressBarWidth,
     getUsageTimerCustomKeybinds,
     getUsageTimezone,
+    isAtSessionLimit,
     isUsage12HourClock,
     isUsageCompact,
     isUsageDateMode,
     isUsageInverted,
     isUsageProgressMode,
+    isUsageSliderMode,
     toggleUsageCompact,
     toggleUsageDateMode,
     toggleUsageHourFormat,
     toggleUsageInverted
 } from './shared/usage-display';
 
-function makeTimerProgressBar(percent: number, width: number): string {
-    const clampedPercent = Math.max(0, Math.min(100, percent));
-    const filledWidth = Math.floor((clampedPercent / 100) * width);
-    const emptyWidth = width - filledWidth;
-    return '█'.repeat(filledWidth) + '░'.repeat(emptyWidth);
-}
+const LABEL = '重置: ';
+const BAR_LABEL = '重置 ';
 
 const BLOCK_RESET_PREVIEW_AT = '2026-03-12T08:30:00.000Z';
 const USAGE_TIMER_LOADING_MESSAGE = '[Loading]';
 
 export class BlockResetTimerWidget implements Widget {
     getDefaultColor(): string { return 'brightBlue'; }
-    getDescription(): string { return '显示当前 5 时时段重置窗口的剩余时间'; }
+    getDescription(): string { return '显示当前 5 小时时段重置窗口的剩余时间'; }
     getDisplayName(): string { return '时段重置计时'; }
     getCategory(): string { return '用量'; }
+    getLabelPrefix(item: WidgetItem): string {
+        const displayMode = getUsageDisplayMode(item);
+        return isUsageProgressMode(displayMode) || isUsageSliderMode(displayMode) ? BAR_LABEL : LABEL;
+    }
 
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         return {
@@ -67,9 +74,13 @@ export class BlockResetTimerWidget implements Widget {
         };
     }
 
+    getHideableStates(): HideableState[] {
+        return [USAGE_NO_DATA_HIDEABLE_STATE, SESSION_UNDER_LIMIT_HIDEABLE_STATE];
+    }
+
     handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
         if (action === 'toggle-progress') {
-            return cycleUsageDisplayMode(item, ['compact', 'absolute']);
+            return cycleUsageDisplayMode(item, ['compact', 'absolute'], true);
         }
 
         if (action === 'toggle-invert') {
@@ -92,18 +103,17 @@ export class BlockResetTimerWidget implements Widget {
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        const displayMode = getUsageDisplayMode(item);
         const inverted = isUsageInverted(item);
         const compact = isUsageCompact(item);
         const dateMode = isUsageDateMode(item);
+        const format = resolveNumberFormat('percent', item, settings);
 
         if (context.isPreview) {
             const previewPercent = inverted ? 90.0 : 10.0;
 
-            if (isUsageProgressMode(displayMode)) {
-                const barWidth = getUsageProgressBarWidth(displayMode);
-                const progressBar = makeTimerProgressBar(previewPercent, barWidth);
-                return formatRawOrLabeledValue(item, '重置 ', `[${progressBar}] ${previewPercent.toFixed(1)}%`);
+            const bar = formatUsageBar(item, previewPercent, format);
+            if (bar !== null) {
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), bar);
             }
 
             if (dateMode) {
@@ -114,42 +124,50 @@ export class BlockResetTimerWidget implements Widget {
                     getUsageLocale(item),
                     isUsage12HourClock(item)
                 );
-                return formatRawOrLabeledValue(item, '重置: ', resetAt ?? (compact ? '03-12 08:30Z' : '2026-03-12 08:30 UTC'));
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), resetAt ?? (compact ? '03-12 08:30Z' : '2026-03-12 08:30 UTC'));
             }
 
-            return formatRawOrLabeledValue(item, '重置: ', compact ? '4时30分' : '4时 30分');
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), compact ? '4时30分' : '4时 30分');
         }
 
         const usageData = context.usageData ?? {};
-        const window = resolveUsageWindowWithFallback(usageData, context.blockMetrics);
+        if (!isAtSessionLimit(context) && isHidden(item, SESSION_UNDER_LIMIT_HIDEABLE_STATE.key)) {
+            return null;
+        }
+        const nowMs = Date.now();
+        const window = resolveUsageWindowWithFallback(usageData, context.blockMetrics, nowMs);
 
         if (!window) {
+            if (isHidden(item, USAGE_NO_DATA_HIDEABLE_STATE.key)) {
+                return null;
+            }
+
             if (usageData.error) {
                 return getUsageErrorMessage(usageData.error);
             }
 
-            return formatRawOrLabeledValue(item, '重置: ', item.rawValue ? USAGE_TIMER_LOADING_MESSAGE : '[加载中]');
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), item.rawValue ? USAGE_TIMER_LOADING_MESSAGE : '[加载中]');
         }
 
-        if (isUsageProgressMode(displayMode)) {
-            const barWidth = getUsageProgressBarWidth(displayMode);
-            const percent = inverted ? window.remainingPercent : window.elapsedPercent;
-            const progressBar = makeTimerProgressBar(percent, barWidth);
-            const percentage = percent.toFixed(1);
-            return formatRawOrLabeledValue(item, '重置 ', `[${progressBar}] ${percentage}%`);
+        const bar = formatUsageBar(item, inverted ? window.remainingPercent : window.elapsedPercent, format);
+        if (bar !== null) {
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(item), bar);
         }
 
         if (dateMode) {
             const timezone = getUsageTimezone(item);
             const locale = getUsageLocale(item);
-            const resetAt = formatUsageResetAt(usageData.sessionResetAt, compact, timezone, locale, isUsage12HourClock(item));
+            // A window from transcript blocks has no reported reset time, but
+            // its reset is just as known: the end of the block
+            const sessionResetAt = usageData.sessionResetAt ?? new Date(nowMs + window.remainingMs).toISOString();
+            const resetAt = formatUsageResetAt(sessionResetAt, compact, timezone, locale, isUsage12HourClock(item));
             if (resetAt) {
-                return formatRawOrLabeledValue(item, '重置: ', resetAt);
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(item), resetAt);
             }
         }
 
         const remainingTime = formatUsageDuration(window.remainingMs, compact);
-        return formatRawOrLabeledValue(item, '重置: ', remainingTime);
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(item), remainingTime);
     }
 
     getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {
@@ -175,4 +193,5 @@ export class BlockResetTimerWidget implements Widget {
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

@@ -1,57 +1,67 @@
-import type { RenderContext } from '../types/RenderContext';
+import type {
+    RenderContext,
+    RenderUsageData
+} from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
+    HideableState,
     Widget,
     WidgetEditorDisplay,
     WidgetItem
 } from '../types/Widget';
+import {
+    formatPercent,
+    resolveNumberFormat
+} from '../utils/number-format';
 import { getUsageErrorMessage } from '../utils/usage';
 
-import {
-    appendHideDisabledModifier,
-    getHideExtraUsageDisabledKeybind,
-    handleToggleExtraUsageDisabledAction,
-    isHideExtraUsageDisabledEnabled
-} from './shared/extra-usage-disabled';
-import { makeTimerProgressBar } from './shared/progress-bar';
+import { EXTRA_USAGE_DISABLED_HIDEABLE_STATE } from './shared/extra-usage-disabled';
+import { isHidden } from './shared/hideable';
 import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 import {
+    USAGE_NO_DATA_HIDEABLE_STATE,
     cycleUsageDisplayMode,
-    formatUsagePercent,
-    getUsageDisplayMode,
+    formatUsageBar,
+    formatUsagePercentValue,
     getUsageDisplayModifierText,
     getUsagePercentCustomKeybinds,
-    getUsageProgressBarWidth,
     isUsageInverted,
-    isUsageProgressMode,
-    isUsageSliderMode,
-    makeSliderBar,
     toggleUsageInverted
 } from './shared/usage-display';
 
+// The usage API reports `utilization: null` until the first charge of the month,
+// while still reporting the amount spent and the monthly limit (both in cents).
+function getExtraUsageUtilization(data: RenderUsageData): number | undefined {
+    if (data.extraUsageUtilization !== undefined) {
+        return data.extraUsageUtilization;
+    }
+    if (data.extraUsageUsed === undefined || data.extraUsageLimit === undefined || data.extraUsageLimit <= 0) {
+        return undefined;
+    }
+    return data.extraUsageUsed / data.extraUsageLimit * 100;
+}
+const LABEL = '超额: ';
+
 export class ExtraUsageUtilizationWidget implements Widget {
     getDefaultColor(): string { return 'green'; }
-    getDescription(): string { return '显示超额用量（按量付费）占比百分比'; }
+    getDescription(): string { return '显示超额用量占每月额度的百分比（Pro/Max 超额消费或 Enterprise 消费）'; }
     getDisplayName(): string { return '超额用量占比'; }
     getCategory(): string { return '用量'; }
+    getLabelPrefix(): string { return LABEL; }
 
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         return {
             displayText: this.getDisplayName(),
-            modifierText: appendHideDisabledModifier(
-                getUsageDisplayModifierText(item, { showUsageDirection: true }),
-                item
-            )
+            modifierText: getUsageDisplayModifierText(item, { showUsageDirection: true })
         };
     }
 
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        const hideDisabledItem = handleToggleExtraUsageDisabledAction(action, item);
-        if (hideDisabledItem) {
-            return hideDisabledItem;
-        }
+    getHideableStates(): HideableState[] {
+        return [EXTRA_USAGE_DISABLED_HIDEABLE_STATE, USAGE_NO_DATA_HIDEABLE_STATE];
+    }
 
+    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
         if (action === 'toggle-progress') {
             return cycleUsageDisplayMode(item, [], true, true);
         }
@@ -64,63 +74,54 @@ export class ExtraUsageUtilizationWidget implements Widget {
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        const displayMode = getUsageDisplayMode(item);
         const inverted = isUsageInverted(item);
+        const format = resolveNumberFormat('percent', item, settings);
 
         if (context.isPreview) {
             const previewPercent = 2.6;
             const renderedPercent = inverted ? 100 - previewPercent : previewPercent;
 
-            if (isUsageProgressMode(displayMode)) {
-                const width = getUsageProgressBarWidth(displayMode);
-                const progressBar = makeTimerProgressBar(renderedPercent, width);
-                return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`);
+            const bar = formatUsageBar(item, renderedPercent, format, undefined, value => formatUsagePercentValue(value, format));
+            if (bar !== null) {
+                return formatRawOrLabeledValue(item, this.getLabelPrefix(), bar);
             }
 
-            if (isUsageSliderMode(displayMode)) {
-                const slider = makeSliderBar(renderedPercent);
-                const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
-                return formatRawOrLabeledValue(item, '超额: ', sliderDisplay);
-            }
-
-            return formatRawOrLabeledValue(item, '超额: ', `${formatUsagePercent(renderedPercent)}%`);
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), formatUsagePercentValue(renderedPercent, format));
         }
 
         const data = context.usageData ?? {};
         if (data.extraUsageEnabled === false) {
-            return isHideExtraUsageDisabledEnabled(item)
+            return isHidden(item, EXTRA_USAGE_DISABLED_HIDEABLE_STATE.key)
                 ? null
-                : formatRawOrLabeledValue(item, '超额: ', 'n/a');
+                : formatRawOrLabeledValue(item, this.getLabelPrefix(), 'n/a');
         }
-        if (data.extraUsageEnabled !== true || data.extraUsageUtilization === undefined) {
-            if (data.error)
-                return getUsageErrorMessage(data.error);
+        const utilization = getExtraUsageUtilization(data);
+        if (data.extraUsageEnabled !== true || utilization === undefined) {
+            if (data.error) {
+                return isHidden(item, USAGE_NO_DATA_HIDEABLE_STATE.key)
+                    ? null
+                    : getUsageErrorMessage(data.error);
+            }
             return null;
         }
 
-        // extraUsageUtilization is already a percentage (0-100), not a fraction
-        const percent = Math.max(0, Math.min(100, data.extraUsageUtilization));
+        // utilization is a percentage (0-100), not a fraction
+        const percent = Math.max(0, Math.min(100, utilization));
         const renderedPercent = inverted ? 100 - percent : percent;
 
-        if (isUsageProgressMode(displayMode)) {
-            const width = getUsageProgressBarWidth(displayMode);
-            const progressBar = makeTimerProgressBar(renderedPercent, width);
-            return formatRawOrLabeledValue(item, '超额: ', `[${progressBar}] ${formatUsagePercent(renderedPercent)}%`);
+        const bar = formatUsageBar(item, renderedPercent, format, undefined, value => formatUsagePercentValue(value, format));
+        if (bar !== null) {
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), bar);
         }
 
-        if (isUsageSliderMode(displayMode)) {
-            const slider = makeSliderBar(renderedPercent);
-            const sliderDisplay = displayMode === 'slider' ? `${slider} ${formatUsagePercent(renderedPercent)}%` : slider;
-            return formatRawOrLabeledValue(item, '超额: ', sliderDisplay);
-        }
-
-        return formatRawOrLabeledValue(item, '超额: ', `${formatUsagePercent(renderedPercent)}%`);
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(), formatUsagePercentValue(renderedPercent, format));
     }
 
     getCustomKeybinds(item?: WidgetItem): CustomKeybind[] {
-        return [...getUsagePercentCustomKeybinds(item, false), getHideExtraUsageDisabledKeybind()];
+        return getUsagePercentCustomKeybinds(item, false);
     }
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

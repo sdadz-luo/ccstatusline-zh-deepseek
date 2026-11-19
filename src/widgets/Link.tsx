@@ -16,6 +16,10 @@ import type {
 } from '../types/Widget';
 import { renderOsc8Link } from '../utils/hyperlink';
 import { shouldInsertInput } from '../utils/input-guards';
+import { isSafeHyperlinkUrl } from '../utils/terminal-sanitize';
+
+import { BlinkingCursor } from './shared/BlinkingCursor';
+import { getAdjacentBoundaries } from './shared/text-cursor';
 
 function isValidLinkUrl(url: string): boolean {
     try {
@@ -55,7 +59,6 @@ function buildMetadata(widget: WidgetItem, urlValue: string, textValue: string):
 
     if (Object.keys(metadata).length === 0) {
         const { metadata, ...rest } = widget;
-        void metadata; // Intentionally unused
         return rest;
     }
 
@@ -101,9 +104,6 @@ export class LinkWidget implements Widget {
     }
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        void settings;
-        void context;
-
         const { url, label } = getLinkLabel(item);
         const displayText = withEmojiPrefix(label, item.rawValue);
 
@@ -111,7 +111,8 @@ export class LinkWidget implements Widget {
             return displayText;
         }
 
-        return renderOsc8Link(new URL(url).href, displayText);
+        // The parsed form percent-encodes what a link can't carry as is
+        return renderOsc8Link(isSafeHyperlinkUrl(url) ? url : new URL(url).href, displayText);
     }
 
     getCustomKeybinds(): CustomKeybind[] {
@@ -127,7 +128,6 @@ export class LinkWidget implements Widget {
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean {
-        void item;
         return true;
     }
 }
@@ -153,6 +153,9 @@ const LinkEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, onCancel,
     const isUrlMode = mode === 'url';
     const activeValue = isUrlMode ? urlInput : textInput;
     const activeCursor = isUrlMode ? urlCursorPos : textCursorPos;
+    const { previous, next } = getAdjacentBoundaries(activeValue, activeCursor);
+    // The grapheme under the cursor ends here, so an emoji is drawn whole
+    const cursorEnd = next ?? activeValue.length;
 
     const updateActiveValue = (value: string, cursor: number) => {
         if (isUrlMode) {
@@ -170,17 +173,17 @@ const LinkEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, onCancel,
         } else if (key.escape) {
             onCancel();
         } else if (key.leftArrow) {
-            updateActiveValue(activeValue, Math.max(0, activeCursor - 1));
+            updateActiveValue(activeValue, previous ?? activeCursor);
         } else if (key.rightArrow) {
-            updateActiveValue(activeValue, Math.min(activeValue.length, activeCursor + 1));
+            updateActiveValue(activeValue, next ?? activeCursor);
         } else if (key.backspace) {
-            if (activeCursor > 0) {
-                const value = activeValue.slice(0, activeCursor - 1) + activeValue.slice(activeCursor);
-                updateActiveValue(value, activeCursor - 1);
+            if (previous !== undefined) {
+                const value = activeValue.slice(0, previous) + activeValue.slice(activeCursor);
+                updateActiveValue(value, previous);
             }
         } else if (key.delete) {
-            if (activeCursor < activeValue.length) {
-                const value = activeValue.slice(0, activeCursor) + activeValue.slice(activeCursor + 1);
+            if (next !== undefined) {
+                const value = activeValue.slice(0, activeCursor) + activeValue.slice(next);
                 updateActiveValue(value, activeCursor);
             }
         } else if (shouldInsertInput(input, key)) {
@@ -197,8 +200,8 @@ const LinkEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, onCancel,
             <Text>
                 {prompt}
                 {activeValue.slice(0, activeCursor)}
-                <Text backgroundColor='gray' color='black'>{activeValue[activeCursor] ?? ' '}</Text>
-                {activeValue.slice(activeCursor + 1)}
+                <BlinkingCursor>{activeValue.slice(activeCursor, cursorEnd) || ' '}</BlinkingCursor>
+                {activeValue.slice(cursorEnd)}
             </Text>
             {isUrlMode ? (
                 <Text dimColor>

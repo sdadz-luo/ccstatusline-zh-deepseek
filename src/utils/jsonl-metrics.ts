@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+import * as fs from 'node:fs';
 import path from 'node:path';
 
 import type {
@@ -7,30 +7,63 @@ import type {
     TokenMetrics,
     TranscriptLine
 } from '../types';
+import type { CompactionData } from '../types/RenderContext';
 
 import {
+    accumulateCompactionStats,
+    createCompactionStats,
     getCompactBoundaryPostTokens,
     isCompactBoundary
 } from './compaction';
+import {
+    contextLengthFromUsageTokens,
+    parseUsageTokens,
+    type UsageTokens
+} from './context-window';
 import { isDeepSeekPeakHour } from './deepseek-pricing';
 import {
-    parseJsonlLine,
-    readJsonlLines
+    iterateJsonlLines,
+    parseJsonlLine
 } from './jsonl-lines';
-
-export interface SpeedMetricsOptions {
-    includeSubagents?: boolean;
-    windowSeconds?: number;
-}
-
-interface SpeedMetricsCollectionOptions {
-    includeSubagents?: boolean;
-    windowSeconds?: number[];
-}
+import {
+    getThinkingEffortUpdate,
+    type ResolvedThinkingEffort
+} from './jsonl-metadata';
+import { getSessionNameFromRecord } from './jsonl-session';
 
 export interface SpeedMetricsCollection {
     sessionAverage: SpeedMetrics;
     windowed: Record<string, SpeedMetrics>;
+}
+
+export interface TranscriptAnalysisOptions {
+    includeSessionDuration?: boolean;
+    includeSpeedMetrics?: boolean;
+    includeSubagents?: boolean;
+    speedWindowSeconds?: number[];
+    includeCompactionStats?: boolean;
+    includeThinkingEffort?: boolean;
+    includeSessionName?: boolean;
+}
+
+export interface TranscriptAnalysis {
+    tokenMetrics: TokenMetrics;
+    sessionDuration: string | null;
+    speedMetricsCollection: SpeedMetricsCollection | null;
+    compactionData: CompactionData | null;
+    thinkingEffort: ResolvedThinkingEffort | undefined;
+    sessionName: string | null;
+}
+
+interface TranscriptScanOptions extends TranscriptAnalysisOptions { includeTokenMetrics?: boolean }
+
+interface TranscriptScanResult {
+    tokenMetrics: TokenMetrics | null;
+    sessionDuration: string | null;
+    speedMetricsCollection: SpeedMetricsCollection | null;
+    compactionData: CompactionData | null;
+    thinkingEffort: ResolvedThinkingEffort | undefined;
+    sessionName: string | null;
 }
 
 interface SpeedInterval {
@@ -46,12 +79,234 @@ interface SpeedRequest {
     firstTimestampMs: number | null;
     /** 首块为 thinking 块时，CLI 记录的那段思考时长；缺失则 TTFT 不可分解 */
     thinkingMs: number | null;
-    interval: SpeedInterval | null;
+    intervals: SpeedInterval[];
 }
 
 interface CollectedSpeedMetrics {
     requests: SpeedRequest[];
     latestTimestampMs: number | null;
+}
+
+interface TokenMetricEntry {
+    usage: UsageTokens;
+    stopReason: string | null | undefined;
+    timestampMs: number | null;
+    isMainChain: boolean;
+    messageId: string | null;
+}
+
+// 按 usage 记录的实际发生时刻把 token 分入波峰/波谷桶；DeepSeek 分时计价消费。
+interface PeakSplit {
+    input: number;
+    output: number;
+    read: number;
+    creation: number;
+}
+
+interface TokenMetricAccumulator {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    peak: PeakSplit;
+    offPeak: PeakSplit;
+    mostRecentMainChainUsage: UsageTokens | null;
+    mostRecentTimestampMs: number | null;
+    mostRecentPostCompactionUsage: UsageTokens | null;
+    mostRecentPostCompactionTimestampMs: number | null;
+}
+
+interface TokenMetricState {
+    metrics: TokenMetricAccumulator;
+    hasStopReasonField: boolean;
+    countedOutputByMessageId: Map<string, number>;
+    lastUsageEntry: TokenMetricEntry | null;
+    sawCompactBoundary: boolean;
+    boundaryAfterLastUsage: boolean;
+    lastCompactBoundaryPostTokens: number | null;
+}
+
+function createEmptyTokenMetrics(): TokenMetrics {
+    return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 0,
+        contextLength: 0,
+        peakBreakdown: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        offPeakBreakdown: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }
+    };
+}
+
+function createTokenMetricAccumulator(): TokenMetricAccumulator {
+    return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        peak: { input: 0, output: 0, read: 0, creation: 0 },
+        offPeak: { input: 0, output: 0, read: 0, creation: 0 },
+        mostRecentMainChainUsage: null,
+        mostRecentTimestampMs: null,
+        mostRecentPostCompactionUsage: null,
+        mostRecentPostCompactionTimestampMs: null
+    };
+}
+
+function resetPostCompactionUsage(accumulator: TokenMetricAccumulator): void {
+    accumulator.mostRecentPostCompactionUsage = null;
+    accumulator.mostRecentPostCompactionTimestampMs = null;
+}
+
+function accumulateTokenMetricEntry(
+    accumulator: TokenMetricAccumulator,
+    entry: TokenMetricEntry,
+    includePostCompactionUsage: boolean
+): void {
+    const { usage } = entry;
+    accumulator.inputTokens += usage.input;
+    accumulator.outputTokens += usage.output;
+    accumulator.cacheReadTokens += usage.read;
+    accumulator.cacheCreationTokens += usage.creation;
+
+    // 无时间戳的记录归入波谷桶（与分时计价回退「按当前时段全量计价」的语义一致）
+    const bucket = entry.timestampMs !== null && isDeepSeekPeakHour(new Date(entry.timestampMs))
+        ? accumulator.peak
+        : accumulator.offPeak;
+    bucket.input += usage.input;
+    bucket.output += usage.output;
+    bucket.read += usage.read;
+    bucket.creation += usage.creation;
+
+    if (!entry.isMainChain || entry.timestampMs === null) {
+        return;
+    }
+
+    if (accumulator.mostRecentTimestampMs === null || entry.timestampMs > accumulator.mostRecentTimestampMs) {
+        accumulator.mostRecentTimestampMs = entry.timestampMs;
+        accumulator.mostRecentMainChainUsage = usage;
+    }
+    if (includePostCompactionUsage
+        && (accumulator.mostRecentPostCompactionTimestampMs === null
+            || entry.timestampMs > accumulator.mostRecentPostCompactionTimestampMs)) {
+        accumulator.mostRecentPostCompactionTimestampMs = entry.timestampMs;
+        accumulator.mostRecentPostCompactionUsage = usage;
+    }
+}
+
+function createTokenMetricState(): TokenMetricState {
+    return {
+        metrics: createTokenMetricAccumulator(),
+        hasStopReasonField: false,
+        countedOutputByMessageId: new Map(),
+        lastUsageEntry: null,
+        sawCompactBoundary: false,
+        boundaryAfterLastUsage: false,
+        lastCompactBoundaryPostTokens: null
+    };
+}
+
+// Count each message once even when another response separates its content
+// blocks. Keep the maximum output and the first counted context snapshot, as
+// consecutive duplicates did; records without an id still count independently.
+function accumulateCumulativeTokenEntry(
+    state: TokenMetricState,
+    entry: TokenMetricEntry,
+    includePostCompactionUsage: boolean
+): void {
+    const previousOutput = entry.messageId === null
+        ? undefined
+        : state.countedOutputByMessageId.get(entry.messageId);
+    if (entry.messageId !== null && previousOutput !== undefined) {
+        const outputDelta = entry.usage.output - previousOutput;
+        if (outputDelta > 0) {
+            state.countedOutputByMessageId.set(entry.messageId, entry.usage.output);
+            state.metrics.outputTokens += outputDelta;
+            const bucket = entry.timestampMs !== null && isDeepSeekPeakHour(new Date(entry.timestampMs))
+                ? state.metrics.peak
+                : state.metrics.offPeak;
+            bucket.output += outputDelta;
+        }
+        return;
+    }
+
+    if (entry.messageId !== null) {
+        state.countedOutputByMessageId.set(entry.messageId, entry.usage.output);
+    }
+    accumulateTokenMetricEntry(state.metrics, entry, includePostCompactionUsage);
+}
+
+function collectTokenMetricRecord(state: TokenMetricState, data: TranscriptLine | null, timestampMs: number | null): void {
+    const compactBoundary = isCompactBoundary(data);
+    if (compactBoundary) {
+        state.sawCompactBoundary = true;
+        state.boundaryAfterLastUsage = true;
+        state.lastCompactBoundaryPostTokens = getCompactBoundaryPostTokens(data);
+        resetPostCompactionUsage(state.metrics);
+    }
+
+    const message = data?.message;
+    const usage = message?.usage;
+    if (usage) {
+        const rawMessageId = message.id;
+        const entry: TokenMetricEntry = {
+            usage: parseUsageTokens(usage),
+            stopReason: message.stop_reason,
+            timestampMs,
+            isMainChain: data?.isSidechain !== true && !data?.isApiErrorMessage,
+            messageId: typeof rawMessageId === 'string' && rawMessageId.length > 0 ? rawMessageId : null
+        };
+
+        const hasStopReason = Object.prototype.hasOwnProperty.call(message, 'stop_reason');
+        if (hasStopReason && !state.hasStopReasonField) {
+            state.hasStopReasonField = true;
+            state.metrics = createTokenMetricAccumulator();
+            state.countedOutputByMessageId.clear();
+        }
+        if (!state.hasStopReasonField || entry.stopReason) {
+            accumulateCumulativeTokenEntry(state, entry, !compactBoundary);
+        }
+        state.lastUsageEntry = entry;
+        state.boundaryAfterLastUsage = compactBoundary;
+    }
+}
+
+function finishTokenMetrics(state: TokenMetricState): TokenMetrics {
+    if (state.hasStopReasonField && state.lastUsageEntry?.stopReason === null) {
+        accumulateCumulativeTokenEntry(state, state.lastUsageEntry, !state.boundaryAfterLastUsage);
+    }
+
+    const contextLengthFromUsage = (usage: UsageTokens | null): number | null => usage
+        ? contextLengthFromUsageTokens(usage)
+        : null;
+    const contextLength = state.sawCompactBoundary
+        ? (contextLengthFromUsage(state.metrics.mostRecentPostCompactionUsage) ?? state.lastCompactBoundaryPostTokens ?? 0)
+        : (contextLengthFromUsage(state.metrics.mostRecentMainChainUsage) ?? 0);
+    const cachedTokens = state.metrics.cacheReadTokens + state.metrics.cacheCreationTokens;
+
+    return {
+        inputTokens: state.metrics.inputTokens,
+        outputTokens: state.metrics.outputTokens,
+        cachedTokens,
+        cacheReadTokens: state.metrics.cacheReadTokens,
+        cacheCreationTokens: state.metrics.cacheCreationTokens,
+        totalTokens: state.metrics.inputTokens + state.metrics.outputTokens + cachedTokens,
+        contextLength,
+        peakBreakdown: {
+            inputTokens: state.metrics.peak.input,
+            outputTokens: state.metrics.peak.output,
+            cacheReadTokens: state.metrics.peak.read,
+            cacheCreationTokens: state.metrics.peak.creation
+        },
+        offPeakBreakdown: {
+            inputTokens: state.metrics.offPeak.input,
+            outputTokens: state.metrics.offPeak.output,
+            cacheReadTokens: state.metrics.offPeak.read,
+            cacheCreationTokens: state.metrics.offPeak.creation
+        }
+    };
 }
 
 function collectAgentIds(value: unknown, agentIds: Set<string>) {
@@ -76,269 +331,13 @@ function collectAgentIds(value: unknown, agentIds: Set<string>) {
     }
 }
 
-function getReferencedSubagentIds(lines: string[]): Set<string> {
-    const agentIds = new Set<string>();
-
-    for (const line of lines) {
-        // Only a handful of lines reference an agent; parsing just those keeps
-        // this scan cheap on large transcripts.
-        if (!line.includes('agentId')) {
-            continue;
-        }
-
-        const data = parseJsonlLine(line);
-        if (!data) {
-            continue;
-        }
-
-        collectAgentIds(data, agentIds);
-    }
-
-    return agentIds;
-}
-
-export async function getSessionDuration(transcriptPath: string): Promise<string | null> {
-    try {
-        if (!fs.existsSync(transcriptPath)) {
-            return null;
-        }
-
-        const lines = await readJsonlLines(transcriptPath);
-
-        if (lines.length === 0) {
-            return null;
-        }
-
-        let firstTimestamp: Date | null = null;
-        let lastTimestamp: Date | null = null;
-
-        // Find first valid timestamp
-        for (const line of lines) {
-            const data = parseJsonlLine(line) as { timestamp?: string } | null;
-            if (data?.timestamp) {
-                firstTimestamp = new Date(data.timestamp);
-                break;
-            }
-        }
-
-        // Find last valid timestamp (iterate backwards)
-        for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i];
-            if (!line) {
-                continue;
-            }
-
-            const data = parseJsonlLine(line) as { timestamp?: string } | null;
-            if (data?.timestamp) {
-                lastTimestamp = new Date(data.timestamp);
-                break;
-            }
-        }
-
-        if (!firstTimestamp || !lastTimestamp) {
-            return null;
-        }
-
-        // Calculate duration in milliseconds
-        const durationMs = lastTimestamp.getTime() - firstTimestamp.getTime();
-
-        // Convert to minutes
-        const totalMinutes = Math.floor(durationMs / (1000 * 60));
-
-        if (totalMinutes < 1) {
-            return '<1m';
-        }
-
-        const hours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-
-        if (hours === 0) {
-            return `${minutes}m`;
-        } else if (minutes === 0) {
-            return `${hours}hr`;
-        } else {
-            return `${hours}hr ${minutes}m`;
-        }
-    } catch {
-        return null;
-    }
-}
-
-export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetrics> {
-    try {
-        // Use Node.js-compatible file reading
-        if (!fs.existsSync(transcriptPath)) {
-            return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, contextLength: 0 };
-        }
-
-        const lines = await readJsonlLines(transcriptPath);
-
-        let inputTokens = 0;
-        let outputTokens = 0;
-        let cacheReadTokens = 0;
-        let cacheCreationTokens = 0;
-        let peakInputTokens = 0, peakOutputTokens = 0, peakCacheReadTokens = 0, peakCacheCreationTokens = 0;
-        let offPeakInputTokens = 0, offPeakOutputTokens = 0, offPeakCacheReadTokens = 0, offPeakCacheCreationTokens = 0;
-        let contextLength = 0;
-
-        // Parse each line and sum up token usage for totals.
-        // Claude Code writes multiple JSONL entries per API call during streaming:
-        // intermediate entries have stop_reason: null, and the final entry has a
-        // string value like "end_turn" or "tool_use". For streaming-aware
-        // transcripts, count finalized entries plus the latest unfinished entry so
-        // live updates do not overcount duplicate partial rows. If the transcript
-        // format has no stop_reason field at all, fall back to counting all entries.
-        //
-        // Claude Code also writes a { type:'system', subtype:'compact_boundary' }
-        // record on every compaction. Usage entries before the most recent boundary
-        // describe a context that no longer exists, so they must not drive context
-        // length - otherwise it stays stuck at the pre-compaction size until the
-        // next turn repopulates Claude Code's live status data.
-        let mostRecentMainChainEntry: TranscriptLine | null = null;
-        let mostRecentTimestamp: Date | null = null;
-        let mostRecentPostCompactionEntry: TranscriptLine | null = null;
-        let mostRecentPostCompactionTimestamp: Date | null = null;
-        let lastCompactBoundaryLineIndex = -1;
-        let lastCompactBoundaryPostTokens: number | null = null;
-
-        const parsedEntries: { data: TranscriptLine; lineIndex: number }[] = [];
-        let hasStopReasonField = false;
-
-        for (const [lineIndex, line] of lines.entries()) {
-            const data = parseJsonlLine(line) as TranscriptLine | null;
-            if (isCompactBoundary(data)) {
-                lastCompactBoundaryLineIndex = lineIndex;
-                lastCompactBoundaryPostTokens = getCompactBoundaryPostTokens(data);
-            }
-            if (data?.message?.usage) {
-                parsedEntries.push({ data, lineIndex });
-                if (Object.hasOwn(data.message, 'stop_reason')) {
-                    hasStopReasonField = true;
-                }
-            }
-        }
-
-        const entriesToCount = hasStopReasonField
-            ? parsedEntries.filter((entry, index) => {
-                const stopReason = entry.data.message?.stop_reason;
-                return Boolean(stopReason) || (stopReason === null && index === parsedEntries.length - 1);
-            })
-            : parsedEntries;
-
-        // 第三方代理（如 deepseek）环境下，同一次 API 调用（同一 message.id）会被拆成
-        // thinking/text/tool_use 多条分块记录写入 transcript，且每条都携带完整 usage。
-        // 按 message.id 去重后再累加，否则输入/输出/缓存数字会虚高数倍。
-        const countedMessageIds = new Set<string>();
-
-        for (const { data, lineIndex } of entriesToCount) {
-            const usage = data.message?.usage;
-            if (!usage) {
-                continue;
-            }
-
-            const messageId = typeof data.message?.id === 'string' ? data.message.id : null;
-            if (messageId !== null) {
-                if (countedMessageIds.has(messageId)) {
-                    continue;
-                }
-
-                countedMessageIds.add(messageId);
-            }
-
-            const input = usage.input_tokens || 0;
-            const output = usage.output_tokens || 0;
-            const cacheRead = usage.cache_read_input_tokens ?? 0;
-            const cacheCreation = usage.cache_creation_input_tokens ?? 0;
-
-            inputTokens += input;
-            outputTokens += output;
-            cacheReadTokens += cacheRead;
-            cacheCreationTokens += cacheCreation;
-
-            // 按该条 usage 的实际发生时刻分入波峰/波谷桶，用于分段计价
-            const entryTimestamp = parseTimestamp(data.timestamp);
-            if (entryTimestamp && isDeepSeekPeakHour(entryTimestamp)) {
-                peakInputTokens += input;
-                peakOutputTokens += output;
-                peakCacheReadTokens += cacheRead;
-                peakCacheCreationTokens += cacheCreation;
-            } else {
-                offPeakInputTokens += input;
-                offPeakOutputTokens += output;
-                offPeakCacheReadTokens += cacheRead;
-                offPeakCacheCreationTokens += cacheCreation;
-            }
-
-            // Track the most recent entry with isSidechain: false (or undefined, which defaults to main chain)
-            // Also skip API error messages (synthetic messages with 0 tokens)
-            if (data.isSidechain !== true && entryTimestamp && !data.isApiErrorMessage) {
-                if (!mostRecentTimestamp || entryTimestamp > mostRecentTimestamp) {
-                    mostRecentTimestamp = entryTimestamp;
-                    mostRecentMainChainEntry = data;
-                }
-                if (lineIndex > lastCompactBoundaryLineIndex
-                    && (!mostRecentPostCompactionTimestamp || entryTimestamp > mostRecentPostCompactionTimestamp)) {
-                    mostRecentPostCompactionTimestamp = entryTimestamp;
-                    mostRecentPostCompactionEntry = data;
-                }
-            }
-        }
-
-        // Context length is the live occupancy of the current context window.
-        // Without a compaction it is the most recent main-chain turn. After a
-        // compaction, prefer the first turn following the boundary, then the
-        // boundary's reported post-compaction size, and otherwise 0 - the stale
-        // pre-compaction turn must never leak through.
-        const contextLengthFromEntry = (entry: TranscriptLine | null): number | null => {
-            const usage = entry?.message?.usage;
-            if (!usage) {
-                return null;
-            }
-            return (usage.input_tokens || 0)
-                + (usage.cache_read_input_tokens ?? 0)
-                + (usage.cache_creation_input_tokens ?? 0);
-        };
-
-        contextLength = lastCompactBoundaryLineIndex >= 0
-            ? (contextLengthFromEntry(mostRecentPostCompactionEntry) ?? lastCompactBoundaryPostTokens ?? 0)
-            : (contextLengthFromEntry(mostRecentMainChainEntry) ?? 0);
-
-        const cachedTokens = cacheReadTokens + cacheCreationTokens;
-        const totalTokens = inputTokens + outputTokens + cachedTokens;
-
-        return {
-            inputTokens,
-            outputTokens,
-            cachedTokens,
-            cacheReadTokens,
-            cacheCreationTokens,
-            totalTokens,
-            contextLength,
-            peakBreakdown: {
-                inputTokens: peakInputTokens,
-                outputTokens: peakOutputTokens,
-                cacheReadTokens: peakCacheReadTokens,
-                cacheCreationTokens: peakCacheCreationTokens
-            },
-            offPeakBreakdown: {
-                inputTokens: offPeakInputTokens,
-                outputTokens: offPeakOutputTokens,
-                cacheReadTokens: offPeakCacheReadTokens,
-                cacheCreationTokens: offPeakCacheCreationTokens
-            }
-        };
-    } catch {
-        return { inputTokens: 0, outputTokens: 0, cachedTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, contextLength: 0 };
-    }
-}
-
-function parseTimestamp(value: string | undefined): Date | null {
+function parseTimestampMs(value: string | undefined): number | null {
     if (!value) {
         return null;
     }
 
-    const timestamp = new Date(value);
-    return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+    const timestampMs = Date.parse(value);
+    return Number.isNaN(timestampMs) ? null : timestampMs;
 }
 
 function mergeIntervals(intervals: SpeedInterval[]): SpeedInterval[] {
@@ -376,6 +375,42 @@ function getIntervalsDurationMs(intervals: SpeedInterval[]): number {
     return intervals.reduce((total, interval) => total + (interval.endMs - interval.startMs), 0);
 }
 
+/**
+ * Cuts a request down to the part of its time inside the window.
+ *
+ * A request's tokens are produced across the time its response ran, so one that
+ * started before the window produced only some of them inside it. It keeps the
+ * share of its tokens that matches the share of that time inside the window: all
+ * of its tokens over only the clipped time would overstate the speed. That time
+ * is the union of the intervals of the response's records, including those
+ * logged before the window; a request without any interval keeps all of its
+ * tokens.
+ */
+function clipRequestToWindow(request: SpeedRequest, window: SpeedInterval): SpeedRequest {
+    const responseTime = mergeIntervals(request.intervals);
+    const intervals: SpeedInterval[] = [];
+    for (const interval of responseTime) {
+        const startMs = Math.max(interval.startMs, window.startMs);
+        const endMs = Math.min(interval.endMs, window.endMs);
+        if (endMs > startMs) {
+            intervals.push({ startMs, endMs });
+        }
+    }
+
+    const fullMs = getIntervalsDurationMs(responseTime);
+    if (fullMs === 0) {
+        return { ...request, intervals };
+    }
+
+    const insideMs = getIntervalsDurationMs(intervals);
+    return {
+        ...request,
+        inputTokens: request.inputTokens * insideMs / fullMs,
+        outputTokens: request.outputTokens * insideMs / fullMs,
+        intervals
+    };
+}
+
 function createEmptySpeedMetrics(): SpeedMetrics {
     return {
         generationDurationMs: 0,
@@ -383,129 +418,6 @@ function createEmptySpeedMetrics(): SpeedMetrics {
         outputTokens: 0,
         totalTokens: 0,
         requestCount: 0
-    };
-}
-
-function normalizeWindowSeconds(value: number | undefined): number | null {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return null;
-    }
-
-    const normalized = Math.trunc(value);
-    return normalized > 0 ? normalized : null;
-}
-
-function collectSpeedMetricsFromLines(lines: string[], ignoreSidechain: boolean): CollectedSpeedMetrics {
-    const requests: SpeedRequest[] = [];
-
-    // 同一次 API 调用（同一 message.id）的分块记录只算一个请求：token 只累加一次，
-    // 区间终点还必须取该消息最后一块的时间戳。代理把一次调用按内容块（thinking /
-    // text / tool_use）拆成多条记录、每块完成时逐条落盘，只用首块时间戳作终点会
-    // 漏掉末尾内容块的生成时间，使速度虚高。
-    const requestIndexById = new Map<string, number>();
-
-    let lastUserTimestamp: Date | null = null;
-    let latestTimestampMs: number | null = null;
-
-    for (const line of lines) {
-        const data = parseJsonlLine(line) as TranscriptLine | null;
-        if (!data || data.isApiErrorMessage) {
-            continue;
-        }
-
-        if (ignoreSidechain && data.isSidechain === true) {
-            continue;
-        }
-
-        const entryTimestamp = parseTimestamp(data.timestamp);
-        if (entryTimestamp) {
-            const entryTimestampMs = entryTimestamp.getTime();
-            if (latestTimestampMs === null || entryTimestampMs > latestTimestampMs) {
-                latestTimestampMs = entryTimestampMs;
-            }
-        }
-
-        if (data.type === 'user' && entryTimestamp) {
-            lastUserTimestamp = entryTimestamp;
-            continue;
-        }
-
-        if (data.type === 'assistant' && data.message?.usage) {
-            const messageId = typeof data.message.id === 'string' ? data.message.id : null;
-            const existingIndex = messageId === null ? undefined : requestIndexById.get(messageId);
-            const entryTimestampMs = entryTimestamp ? entryTimestamp.getTime() : null;
-
-            if (existingIndex !== undefined) {
-                const existing = requests[existingIndex];
-                if (existing && entryTimestampMs !== null) {
-                    if (existing.assistantTimestampMs !== null) {
-                        existing.assistantTimestampMs = Math.max(existing.assistantTimestampMs, entryTimestampMs);
-                    } else {
-                        existing.assistantTimestampMs = entryTimestampMs;
-                    }
-
-                    // 合并分支只维护区间终点；首块时间戳保持首次出现值（正常时序下不会为空）
-                    if (existing.firstTimestampMs === null) {
-                        existing.firstTimestampMs = entryTimestampMs;
-                        if (existing.thinkingMs === null && typeof data.thinkingDurationMs === 'number') {
-                            existing.thinkingMs = data.thinkingDurationMs;
-                        }
-                    }
-
-                    if (existing.interval) {
-                        existing.interval.endMs = Math.max(existing.interval.endMs, entryTimestampMs);
-                    }
-                }
-
-                continue;
-            }
-
-            if (messageId !== null) {
-                requestIndexById.set(messageId, requests.length);
-            }
-
-            const inputTokens = data.message.usage.input_tokens || 0;
-            const outputTokens = data.message.usage.output_tokens || 0;
-            let interval: SpeedInterval | null = null;
-            if (entryTimestampMs !== null && lastUserTimestamp) {
-                const startMs = lastUserTimestamp.getTime();
-                if (entryTimestampMs > startMs) {
-                    interval = { startMs, endMs: entryTimestampMs };
-                }
-            }
-
-            requests.push({
-                inputTokens,
-                outputTokens,
-                assistantTimestampMs: entryTimestampMs,
-                firstTimestampMs: entryTimestampMs,
-                thinkingMs: typeof data.thinkingDurationMs === 'number' ? data.thinkingDurationMs : null,
-                interval
-            });
-        }
-    }
-
-    return {
-        requests,
-        latestTimestampMs
-    };
-}
-
-function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSpeedMetrics {
-    const requests: SpeedRequest[] = [];
-    let latestTimestampMs: number | null = null;
-
-    for (const part of parts) {
-        requests.push(...part.requests);
-
-        if (part.latestTimestampMs !== null && (latestTimestampMs === null || part.latestTimestampMs > latestTimestampMs)) {
-            latestTimestampMs = part.latestTimestampMs;
-        }
-    }
-
-    return {
-        requests,
-        latestTimestampMs
     };
 }
 
@@ -519,12 +431,17 @@ function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSp
  * 返回 null，由调用方用会话中位数估算。
  */
 function computeRequestTtftMs(request: SpeedRequest): number | null {
-    if (request.firstTimestampMs === null || request.thinkingMs === null || !request.interval) {
+    if (request.firstTimestampMs === null || request.thinkingMs === null) {
         return null;
     }
 
-    const ttftMs = request.firstTimestampMs - request.interval.startMs - request.thinkingMs;
-    const intervalDurationMs = request.interval.endMs - request.interval.startMs;
+    const firstInterval = mergeIntervals(request.intervals)[0];
+    if (!firstInterval) {
+        return null;
+    }
+
+    const ttftMs = request.firstTimestampMs - firstInterval.startMs - request.thinkingMs;
+    const intervalDurationMs = firstInterval.endMs - firstInterval.startMs;
     if (ttftMs < 0 || ttftMs > intervalDurationMs) {
         return null;
     }
@@ -559,26 +476,190 @@ function collectTtftSamples(requests: SpeedRequest[]): number[] {
     return samples;
 }
 
+// 生成段从「请求起点 + TTFT」起算，把排队与首字等待从分母剔除；
+// 无样本请求用中位数估算，估算值最多占区间的 80%，避免短请求被整个扣没。
+function applyTtftToIntervals(request: SpeedRequest, fallbackTtftMs: number | null): SpeedInterval[] {
+    const merged = mergeIntervals(request.intervals);
+    const first = merged[0];
+    if (!first) {
+        return merged;
+    }
+
+    const ttftMs = computeRequestTtftMs(request) ?? fallbackTtftMs;
+    if (ttftMs === null) {
+        return merged;
+    }
+
+    const intervalDurationMs = first.endMs - first.startMs;
+    const appliedTtftMs = Math.min(Math.max(ttftMs, 0), intervalDurationMs * 0.8);
+    const startMs = Math.min(first.startMs + appliedTtftMs, first.endMs);
+    return [{ startMs, endMs: first.endMs }, ...merged.slice(1)]
+        .filter(interval => interval.endMs > interval.startMs);
+}
+
+function normalizeWindowSeconds(value: number | undefined): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return null;
+    }
+
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : null;
+}
+
+interface SpeedMetricCollectorState extends CollectedSpeedMetrics {
+    lastUserTimestampMs: number | null;
+    lastRequest: SpeedRequest | null;
+    lastRequestInterval: SpeedInterval | null;
+    // Scoped to this transcript so subagent collectors keep independent requests.
+    requestsByMessageId: Map<string, SpeedRequest>;
+}
+
+function createSpeedMetricCollector(): SpeedMetricCollectorState {
+    return {
+        requests: [],
+        latestTimestampMs: null,
+        lastUserTimestampMs: null,
+        lastRequest: null,
+        lastRequestInterval: null,
+        requestsByMessageId: new Map()
+    };
+}
+
+function collectSpeedMetricRecord(
+    state: SpeedMetricCollectorState,
+    data: TranscriptLine | null,
+    timestampMs: number | null,
+    ignoreSidechain: boolean
+): void {
+    if (!data || data.isApiErrorMessage || (ignoreSidechain && data.isSidechain === true)) {
+        return;
+    }
+
+    if (timestampMs !== null && (state.latestTimestampMs === null || timestampMs > state.latestTimestampMs)) {
+        state.latestTimestampMs = timestampMs;
+    }
+
+    if (data.type === 'user' && timestampMs !== null) {
+        state.lastUserTimestampMs = timestampMs;
+        return;
+    }
+
+    if (data.type !== 'assistant' || !data.message?.usage) {
+        return;
+    }
+
+    let interval: SpeedInterval | null = null;
+    if (timestampMs !== null && state.lastUserTimestampMs !== null && timestampMs > state.lastUserTimestampMs) {
+        interval = { startMs: state.lastUserTimestampMs, endMs: timestampMs };
+    }
+
+    const usage = parseUsageTokens(data.message.usage);
+    const rawMessageId = data.message.id;
+    const messageId = typeof rawMessageId === 'string' && rawMessageId.length > 0 ? rawMessageId : null;
+
+    // One API call can be written as several entries sharing a message.id,
+    // each repeating the call's input tokens. Count the call once, keeping
+    // its largest output count and its latest end time.
+    const previous = messageId === null ? undefined : state.requestsByMessageId.get(messageId);
+    if (previous) {
+        if (state.lastRequest !== previous) {
+            state.lastRequestInterval = null;
+        }
+        // 合并分支只维护区间终点；首块时间戳保持首次出现值（正常时序下不会为空）
+        if (previous.firstTimestampMs === null) {
+            previous.firstTimestampMs = timestampMs;
+            if (previous.thinkingMs === null && typeof data.thinkingDurationMs === 'number') {
+                previous.thinkingMs = data.thinkingDurationMs;
+            }
+        }
+        previous.inputTokens = usage.input;
+        previous.outputTokens = Math.max(previous.outputTokens, usage.output);
+        if (timestampMs !== null) {
+            previous.assistantTimestampMs = timestampMs;
+        }
+        if (interval) {
+            const lastInterval = state.lastRequestInterval;
+            if (lastInterval) {
+                lastInterval.startMs = Math.min(lastInterval.startMs, interval.startMs);
+                lastInterval.endMs = Math.max(lastInterval.endMs, interval.endMs);
+            } else {
+                // A nonconsecutive repeat must not turn the intervening idle
+                // time into active processing time.
+                previous.intervals.push(interval);
+                state.lastRequestInterval = interval;
+            }
+        }
+        state.lastRequest = previous;
+        return;
+    }
+
+    const request: SpeedRequest = {
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        assistantTimestampMs: timestampMs,
+        firstTimestampMs: timestampMs,
+        thinkingMs: typeof data.thinkingDurationMs === 'number' ? data.thinkingDurationMs : null,
+        intervals: interval ? [interval] : []
+    };
+    state.requests.push(request);
+    state.lastRequest = request;
+    state.lastRequestInterval = interval;
+    if (messageId !== null) {
+        state.requestsByMessageId.set(messageId, request);
+    }
+}
+
+async function collectSpeedMetricsFromFile(filePath: string, ignoreSidechain: boolean): Promise<CollectedSpeedMetrics> {
+    const state = createSpeedMetricCollector();
+    for await (const line of iterateJsonlLines(filePath)) {
+        const data = parseJsonlLine(line) as TranscriptLine | null;
+        collectSpeedMetricRecord(state, data, parseTimestampMs(data?.timestamp), ignoreSidechain);
+    }
+
+    return state;
+}
+
+function mergeCollectedSpeedMetrics(parts: CollectedSpeedMetrics[]): CollectedSpeedMetrics {
+    const requests: SpeedRequest[] = [];
+    let latestTimestampMs: number | null = null;
+
+    for (const part of parts) {
+        // One push per request: spreading a long transcript's requests into a
+        // single call exceeds the engine's argument limit and throws
+        for (const request of part.requests) {
+            requests.push(request);
+        }
+
+        if (part.latestTimestampMs !== null && (latestTimestampMs === null || part.latestTimestampMs > latestTimestampMs)) {
+            latestTimestampMs = part.latestTimestampMs;
+        }
+    }
+
+    return {
+        requests,
+        latestTimestampMs
+    };
+}
+
 function buildSpeedMetrics(
     collected: CollectedSpeedMetrics,
     windowSeconds?: number
 ): SpeedMetrics {
     const normalizedWindowSeconds = normalizeWindowSeconds(windowSeconds);
-    if (normalizedWindowSeconds !== null && collected.latestTimestampMs === null) {
+    const windowBounds = normalizedWindowSeconds !== null && collected.latestTimestampMs !== null
+        ? {
+            startMs: collected.latestTimestampMs - (normalizedWindowSeconds * 1000),
+            endMs: collected.latestTimestampMs
+        }
+        : null;
+    if (normalizedWindowSeconds !== null && windowBounds === null) {
         return createEmptySpeedMetrics();
     }
 
-    const windowEndMs = normalizedWindowSeconds !== null && collected.latestTimestampMs !== null
-        ? collected.latestTimestampMs
-        : null;
-    const windowStartMs = normalizedWindowSeconds !== null && windowEndMs !== null
-        ? windowEndMs - (normalizedWindowSeconds * 1000)
-        : null;
-
-    const selectedRequests = normalizedWindowSeconds !== null && windowStartMs !== null && windowEndMs !== null
+    const selectedRequests = windowBounds
         ? collected.requests.filter(request => request.assistantTimestampMs !== null
-            && request.assistantTimestampMs >= windowStartMs
-            && request.assistantTimestampMs <= windowEndMs
+            && request.assistantTimestampMs >= windowBounds.startMs
+            && request.assistantTimestampMs <= windowBounds.endMs
         )
         : collected.requests;
 
@@ -595,45 +676,28 @@ function buildSpeedMetrics(
     let outputTokens = 0;
     const intervals: SpeedInterval[] = [];
 
-    for (const request of selectedRequests) {
-        // 无条件计入 token（含无时间戳的请求），保持与 token 统计一致
-        if (!request.interval) {
-            inputTokens += request.inputTokens;
-            outputTokens += request.outputTokens;
+    for (const rawRequest of selectedRequests) {
+        // 无区间的请求（无法定位生成时段）无条件计入 token，保持与 token 统计一致
+        if (rawRequest.intervals.length === 0) {
+            inputTokens += rawRequest.inputTokens;
+            outputTokens += rawRequest.outputTokens;
             continue;
         }
 
-        let clippedStartMs = windowStartMs !== null
-            ? Math.max(request.interval.startMs, windowStartMs)
-            : request.interval.startMs;
-        const clippedEndMs = windowEndMs !== null
-            ? Math.min(request.interval.endMs, windowEndMs)
-            : request.interval.endMs;
-
-        // 生成段从「请求起点 + TTFT」起算，把排队与首字等待从分母剔除；
-        // 无样本请求用中位数估算，估算值最多占区间的 80%，避免短请求被整个扣没。
-        const ttftMs = computeRequestTtftMs(request) ?? fallbackTtftMs;
-        if (ttftMs !== null) {
-            const intervalDurationMs = request.interval.endMs - request.interval.startMs;
-            const appliedTtftMs = Math.min(Math.max(ttftMs, 0), intervalDurationMs * 0.8);
-            clippedStartMs = Math.max(
-                clippedStartMs,
-                Math.min(request.interval.startMs + appliedTtftMs, clippedEndMs)
-            );
-        }
+        const request = windowBounds ? clipRequestToWindow(rawRequest, windowBounds) : rawRequest;
+        const requestIntervals = applyTtftToIntervals(request, fallbackTtftMs);
 
         // 扣减后没有剩余时间：该请求无法归入解码口径，分子分母一并排除，
         // 否则会出现 token 照算、时长不计的速度虚高。
-        if (clippedEndMs <= clippedStartMs) {
+        if (requestIntervals.length === 0) {
             continue;
         }
 
         inputTokens += request.inputTokens;
         outputTokens += request.outputTokens;
-        intervals.push({
-            startMs: clippedStartMs,
-            endMs: clippedEndMs
-        });
+        for (const interval of requestIntervals) {
+            intervals.push(interval);
+        }
     }
 
     const mergedIntervals = mergeIntervals(intervals);
@@ -654,6 +718,157 @@ function buildEmptyWindowedMetrics(windowSeconds: number[]): Record<string, Spee
         windowed[window.toString()] = createEmptySpeedMetrics();
     }
     return windowed;
+}
+
+function buildSpeedMetricsCollection(collected: CollectedSpeedMetrics[], windowSeconds: number[]): SpeedMetricsCollection {
+    const combined = mergeCollectedSpeedMetrics(collected);
+    const windowed: Record<string, SpeedMetrics> = {};
+    for (const window of windowSeconds) {
+        windowed[window.toString()] = buildSpeedMetrics(combined, window);
+    }
+
+    return {
+        sessionAverage: buildSpeedMetrics(combined),
+        windowed
+    };
+}
+
+function formatSessionDuration(firstTimestampMs: number | null, lastTimestampMs: number | null): string | null {
+    if (firstTimestampMs === null || lastTimestampMs === null) {
+        return null;
+    }
+
+    const totalMinutes = Math.floor((lastTimestampMs - firstTimestampMs) / (1000 * 60));
+    if (totalMinutes < 1) {
+        return '<1m';
+    }
+
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0) {
+        return `${minutes}m`;
+    }
+    if (minutes === 0) {
+        return `${hours}hr`;
+    }
+    return `${hours}hr ${minutes}m`;
+}
+
+function normalizeSpeedWindows(windowSeconds: number[] | undefined): number[] {
+    return Array.from(
+        new Set(
+            (windowSeconds ?? [])
+                .map(window => normalizeWindowSeconds(window))
+                .filter((window): window is number => window !== null)
+        )
+    );
+}
+
+function createEmptyScanResult(options: TranscriptScanOptions, speedWindows: number[]): TranscriptScanResult {
+    return {
+        tokenMetrics: options.includeTokenMetrics ? createEmptyTokenMetrics() : null,
+        sessionDuration: null,
+        speedMetricsCollection: options.includeSpeedMetrics
+            ? {
+                sessionAverage: createEmptySpeedMetrics(),
+                windowed: buildEmptyWindowedMetrics(speedWindows)
+            }
+            : null,
+        compactionData: options.includeCompactionStats ? createCompactionStats() : null,
+        thinkingEffort: undefined,
+        sessionName: null
+    };
+}
+
+async function scanTranscript(transcriptPath: string, options: TranscriptScanOptions): Promise<TranscriptScanResult> {
+    const speedWindows = normalizeSpeedWindows(options.speedWindowSeconds);
+    const emptyResult = createEmptyScanResult(options, speedWindows);
+    if (!fs.existsSync(transcriptPath)) {
+        return emptyResult;
+    }
+
+    const tokenState = options.includeTokenMetrics ? createTokenMetricState() : null;
+    const speedState = options.includeSpeedMetrics ? createSpeedMetricCollector() : null;
+    const compactionData = options.includeCompactionStats ? createCompactionStats() : null;
+    const referencedAgentIds = options.includeSpeedMetrics && options.includeSubagents
+        ? new Set<string>()
+        : null;
+    let firstTimestampMs: number | null = null;
+    let lastTimestampMs: number | null = null;
+    let thinkingEffort: ResolvedThinkingEffort | undefined;
+    let sessionName: string | null = null;
+    let automaticTitle: string | null = null;
+
+    try {
+        for await (const line of iterateJsonlLines(transcriptPath)) {
+            const data = parseJsonlLine(line) as TranscriptLine | null;
+            const needsTimestamp = options.includeSessionDuration === true
+                || speedState !== null
+                || Boolean(data?.message?.usage);
+            const timestampMs = needsTimestamp ? parseTimestampMs(data?.timestamp) : null;
+
+            if (tokenState) {
+                collectTokenMetricRecord(tokenState, data, timestampMs);
+            }
+            if (options.includeSessionDuration && timestampMs !== null) {
+                firstTimestampMs ??= timestampMs;
+                lastTimestampMs = timestampMs;
+            }
+            if (speedState) {
+                collectSpeedMetricRecord(speedState, data, timestampMs, true);
+            }
+            if (referencedAgentIds) {
+                collectAgentIds(data, referencedAgentIds);
+            }
+            if (compactionData) {
+                accumulateCompactionStats(compactionData, data);
+            }
+            if (options.includeThinkingEffort) {
+                const update = getThinkingEffortUpdate(data);
+                if (update) {
+                    thinkingEffort = update.effort;
+                }
+            }
+            if (options.includeSessionName) {
+                sessionName = getSessionNameFromRecord(data) ?? sessionName;
+                automaticTitle = getSessionNameFromRecord(data, 'ai-title') ?? automaticTitle;
+            }
+        }
+
+        let speedMetricsCollection: SpeedMetricsCollection | null = null;
+        if (speedState) {
+            const collected: CollectedSpeedMetrics[] = [speedState];
+            if (referencedAgentIds) {
+                const subagentPaths = getSubagentTranscriptPaths(transcriptPath, referencedAgentIds);
+                const subagentMetrics = await Promise.all(subagentPaths.map(async (subagentPath) => {
+                    try {
+                        return await collectSpeedMetricsFromFile(subagentPath, false);
+                    } catch {
+                        return null;
+                    }
+                }));
+                for (const metrics of subagentMetrics) {
+                    if (metrics) {
+                        collected.push(metrics);
+                    }
+                }
+            }
+            speedMetricsCollection = buildSpeedMetricsCollection(collected, speedWindows);
+        }
+
+        return {
+            tokenMetrics: tokenState ? finishTokenMetrics(tokenState) : null,
+            sessionDuration: options.includeSessionDuration
+                ? formatSessionDuration(firstTimestampMs, lastTimestampMs)
+                : null,
+            speedMetricsCollection,
+            compactionData,
+            thinkingEffort,
+            sessionName: sessionName ?? automaticTitle
+        };
+    } catch {
+        return emptyResult;
+    }
 }
 
 function getSubagentTranscriptPaths(transcriptPath: string, referencedAgentIds: Set<string>): string[] {
@@ -707,6 +922,25 @@ function getSubagentTranscriptPaths(transcriptPath: string, referencedAgentIds: 
     return matchedPaths;
 }
 
+export async function getTranscriptAnalysis(
+    transcriptPath: string,
+    options: TranscriptAnalysisOptions = {}
+): Promise<TranscriptAnalysis> {
+    const result = await scanTranscript(transcriptPath, {
+        ...options,
+        includeTokenMetrics: true
+    });
+
+    return {
+        tokenMetrics: result.tokenMetrics ?? createEmptyTokenMetrics(),
+        sessionDuration: result.sessionDuration,
+        speedMetricsCollection: result.speedMetricsCollection,
+        compactionData: result.compactionData,
+        thinkingEffort: result.thinkingEffort,
+        sessionName: result.sessionName
+    };
+}
+
 function accumulateBreakdown(target: TokenBreakdown, source: Partial<TokenBreakdown> | null | undefined): void {
     if (!source) {
         return;
@@ -719,23 +953,36 @@ function accumulateBreakdown(target: TokenBreakdown, source: Partial<TokenBreakd
 }
 
 // 汇总本次会话所有直接子代理（Task 工具派生的 agent）的 token 用量。
-// 子代理 transcript 与主 transcript 同构，复用 getTokenMetrics 的解析/去重/分桶逻辑。
+// 子代理 transcript 与主 transcript 同构，复用 getTranscriptAnalysis 的解析/去重/分桶逻辑。
 export async function getSubagentTokenMetrics(transcriptPath: string): Promise<TokenMetrics | null> {
-    let mainLines: string[];
+    const referencedAgentIds = new Set<string>();
 
     try {
-        mainLines = await readJsonlLines(transcriptPath);
+        for await (const line of iterateJsonlLines(transcriptPath)) {
+            // Only a handful of lines reference an agent; parsing just those keeps
+            // this scan cheap on large transcripts.
+            if (!line.includes('agentId')) {
+                continue;
+            }
+
+            collectAgentIds(parseJsonlLine(line), referencedAgentIds);
+        }
     } catch {
         return null;
     }
 
-    const referencedSubagentIds = getReferencedSubagentIds(mainLines);
-    const subagentPaths = getSubagentTranscriptPaths(transcriptPath, referencedSubagentIds);
+    const subagentPaths = getSubagentTranscriptPaths(transcriptPath, referencedAgentIds);
     if (subagentPaths.length === 0) {
         return null;
     }
 
-    const metricsResults = await Promise.all(subagentPaths.map(async subagentPath => getTokenMetrics(subagentPath)));
+    const metricsResults = await Promise.all(subagentPaths.map(async (subagentPath) => {
+        try {
+            return (await getTranscriptAnalysis(subagentPath)).tokenMetrics;
+        } catch {
+            return null;
+        }
+    }));
 
     let inputTokens = 0;
     let outputTokens = 0;
@@ -745,6 +992,10 @@ export async function getSubagentTokenMetrics(transcriptPath: string): Promise<T
     const offPeak: TokenBreakdown = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
 
     for (const metrics of metricsResults) {
+        if (!metrics) {
+            continue;
+        }
+
         inputTokens += metrics.inputTokens;
         outputTokens += metrics.outputTokens;
         cacheReadTokens += metrics.cacheReadTokens ?? 0;
@@ -767,69 +1018,43 @@ export async function getSubagentTokenMetrics(transcriptPath: string): Promise<T
     };
 }
 
+// 兼容旧 API：上游 2.2.30+ 改用 getTranscriptAnalysis 统一扫描，本 Fork 保留这些
+// 单点入口给既有消费方与测试，内部复用同一套扫描流程（每次调用独立扫描）。
+export interface SpeedMetricsOptions {
+    includeSubagents?: boolean;
+    windowSeconds?: number;
+}
+
+export interface SpeedMetricsCollectionOptions {
+    includeSubagents?: boolean;
+    windowSeconds?: number[];
+}
+
+export async function getTokenMetrics(transcriptPath: string): Promise<TokenMetrics> {
+    const result = await scanTranscript(transcriptPath, { includeTokenMetrics: true });
+    return result.tokenMetrics ?? createEmptyTokenMetrics();
+}
+
+export async function getSessionDuration(transcriptPath: string): Promise<string | null> {
+    const result = await scanTranscript(transcriptPath, { includeSessionDuration: true });
+    return result.sessionDuration;
+}
+
 export async function getSpeedMetricsCollection(
     transcriptPath: string,
     options: SpeedMetricsCollectionOptions = {}
 ): Promise<SpeedMetricsCollection> {
-    const normalizedWindows = Array.from(
-        new Set(
-            (options.windowSeconds ?? [])
-                .map(window => normalizeWindowSeconds(window))
-                .filter((window): window is number => window !== null)
-        )
-    );
-    const emptyWindowedMetrics = buildEmptyWindowedMetrics(normalizedWindows);
+    const windows = normalizeSpeedWindows(options.windowSeconds);
+    const result = await scanTranscript(transcriptPath, {
+        includeSpeedMetrics: true,
+        includeSubagents: options.includeSubagents,
+        speedWindowSeconds: windows
+    });
 
-    try {
-        if (!fs.existsSync(transcriptPath)) {
-            return {
-                sessionAverage: createEmptySpeedMetrics(),
-                windowed: emptyWindowedMetrics
-            };
-        }
-
-        const mainLines = await readJsonlLines(transcriptPath);
-        const allCollected: CollectedSpeedMetrics[] = [
-            collectSpeedMetricsFromLines(mainLines, true)
-        ];
-
-        if (options.includeSubagents === true) {
-            const referencedSubagentIds = getReferencedSubagentIds(mainLines);
-            const subagentPaths = getSubagentTranscriptPaths(transcriptPath, referencedSubagentIds);
-            const subagentMetricsResults = await Promise.all(subagentPaths.map(async (subagentPath) => {
-                try {
-                    const subagentLines = await readJsonlLines(subagentPath);
-                    return collectSpeedMetricsFromLines(subagentLines, false);
-                } catch {
-                    return null;
-                }
-            }));
-
-            for (const subagentMetrics of subagentMetricsResults) {
-                if (!subagentMetrics) {
-                    continue;
-                }
-
-                allCollected.push(subagentMetrics);
-            }
-        }
-
-        const combined = mergeCollectedSpeedMetrics(allCollected);
-        const windowed: Record<string, SpeedMetrics> = {};
-        for (const window of normalizedWindows) {
-            windowed[window.toString()] = buildSpeedMetrics(combined, window);
-        }
-
-        return {
-            sessionAverage: buildSpeedMetrics(combined),
-            windowed
-        };
-    } catch {
-        return {
-            sessionAverage: createEmptySpeedMetrics(),
-            windowed: emptyWindowedMetrics
-        };
-    }
+    return result.speedMetricsCollection ?? {
+        sessionAverage: createEmptySpeedMetrics(),
+        windowed: buildEmptyWindowedMetrics(windows)
+    };
 }
 
 export async function getSpeedMetrics(
@@ -837,14 +1062,14 @@ export async function getSpeedMetrics(
     options: SpeedMetricsOptions = {}
 ): Promise<SpeedMetrics> {
     const requestedWindow = normalizeWindowSeconds(options.windowSeconds);
-    const metricsCollection = await getSpeedMetricsCollection(transcriptPath, {
+    const collection = await getSpeedMetricsCollection(transcriptPath, {
         includeSubagents: options.includeSubagents,
         windowSeconds: requestedWindow ? [requestedWindow] : []
     });
 
     if (requestedWindow === null) {
-        return metricsCollection.sessionAverage;
+        return collection.sessionAverage;
     }
 
-    return metricsCollection.windowed[requestedWindow.toString()] ?? createEmptySpeedMetrics();
+    return collection.windowed[requestedWindow.toString()] ?? createEmptySpeedMetrics();
 }

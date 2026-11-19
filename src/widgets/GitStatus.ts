@@ -1,24 +1,12 @@
 import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
 import type {
     CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
     WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
-import {
-    getGitStatus,
-    isInsideGitWorkTree
-} from '../utils/git';
+import { getGitStatus } from '../utils/git';
 
-import { makeModifierText } from './shared/editor-display';
-import {
-    getHideNoGitKeybinds,
-    getHideNoGitModifierText,
-    handleToggleNoGitAction,
-    isHideNoGitEnabled
-} from './shared/git-no-git';
+import { GitStatusWidgetBase } from './shared/git-status-widget';
 import {
     getSlotSymbol,
     getSymbolKeybind,
@@ -31,39 +19,16 @@ const STAGED_SLOT: SymbolSlot = { id: 'symbolStaged', label: '已暂存', defaul
 const UNSTAGED_SLOT: SymbolSlot = { id: 'symbolUnstaged', label: '未暂存', defaultSymbol: '*' };
 const UNTRACKED_SLOT: SymbolSlot = { id: 'symbolUntracked', label: '未追踪', defaultSymbol: '?' };
 
-export class GitStatusWidget implements Widget {
+export class GitStatusWidget extends GitStatusWidgetBase {
     getDefaultColor(): string { return 'yellow'; }
     getDescription(): string { return '显示 Git 状态指示：+ 已暂存, * 未暂存, ? 未跟踪, ! 冲突'; }
     getDisplayName(): string { return 'Git 状态'; }
-    getCategory(): string { return 'Git'; }
 
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        const modifiers: string[] = [];
-        const noGitText = getHideNoGitModifierText(item);
-        if (noGitText)
-            modifiers.push('隐藏「无 Git」');
-
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: makeModifierText(modifiers)
-        };
+    protected renderPreview(item: WidgetItem): string {
+        return this.formatStatus(item, { staged: true, unstaged: true, untracked: false, conflicts: false });
     }
 
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        return handleToggleNoGitAction(action, item);
-    }
-
-    render(item: WidgetItem, context: RenderContext, _settings: Settings): string | null {
-        const hideNoGit = isHideNoGitEnabled(item);
-
-        if (context.isPreview) {
-            return this.formatStatus(item, { staged: true, unstaged: true, untracked: false, conflicts: false });
-        }
-
-        if (!isInsideGitWorkTree(context)) {
-            return hideNoGit ? null : '（无 Git）';
-        }
-
+    protected renderInWorkTree(item: WidgetItem, context: RenderContext): string | null {
         const status = getGitStatus(context);
 
         // Hide if clean
@@ -89,10 +54,7 @@ export class GitStatusWidget implements Widget {
     }
 
     getCustomKeybinds(): CustomKeybind[] {
-        return [
-            ...getHideNoGitKeybinds(),
-            getSymbolKeybind()
-        ];
+        return [getSymbolKeybind()];
     }
 
     renderEditor(props: WidgetEditorProps) {
@@ -100,5 +62,4 @@ export class GitStatusWidget implements Widget {
     }
 
     supportsRawValue(): boolean { return false; }
-    supportsColors(_item: WidgetItem): boolean { return true; }
 }

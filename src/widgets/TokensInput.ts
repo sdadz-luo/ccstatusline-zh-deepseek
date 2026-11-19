@@ -1,40 +1,19 @@
 import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
-import type {
-    Widget,
-    WidgetEditorDisplay,
-    WidgetItem
-} from '../types/Widget';
 import { getContextWindowInputTotalTokens } from '../utils/context-window';
-import { formatTokens } from '../utils/renderer';
 
-import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
+import { TokenCountWidget } from './shared/token-count-widget';
 
-export class TokensInputWidget implements Widget {
+export class TokensInputWidget extends TokenCountWidget {
+    protected readonly label = '输入: ';
+    protected readonly previewTokens = 15200;
+
     getDefaultColor(): string { return 'blue'; }
     getDescription(): string { return '显示当前会话的输入 Token 数'; }
     getDisplayName(): string { return '输入 Token'; }
-    getCategory(): string { return 'Token'; }
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        return { displayText: this.getDisplayName() };
+
+    protected getTokenCount(context: RenderContext): number | null {
+        return context.tokenMetrics?.inputTokens
+            ?? getContextWindowInputTotalTokens(context.data)
+            ?? null;
     }
-
-    render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
-        if (context.isPreview) {
-            return formatRawOrLabeledValue(item, '输入: ', '15.2k');
-        }
-
-        if (context.tokenMetrics) {
-            return formatRawOrLabeledValue(item, '输入: ', formatTokens(context.tokenMetrics.inputTokens));
-        }
-
-        const inputTotalTokens = getContextWindowInputTotalTokens(context.data);
-        if (inputTotalTokens !== null) {
-            return formatRawOrLabeledValue(item, '输入: ', formatTokens(inputTotalTokens));
-        }
-        return null;
-    }
-
-    supportsRawValue(): boolean { return true; }
-    supportsColors(item: WidgetItem): boolean { return true; }
 }

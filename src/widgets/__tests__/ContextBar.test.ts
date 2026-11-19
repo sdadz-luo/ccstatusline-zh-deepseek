@@ -12,6 +12,8 @@ import { DEFAULT_SETTINGS } from '../../types/Settings';
 import type { WidgetItem } from '../../types/Widget';
 import * as usage from '../../utils/usage';
 import { ContextBarWidget } from '../ContextBar';
+import { ContextLengthWidget } from '../ContextLength';
+import { ContextWindowWidget } from '../ContextWindow';
 
 describe('ContextBarWidget', () => {
     beforeEach(() => {
@@ -159,10 +161,53 @@ describe('ContextBarWidget', () => {
         const second = widget.handleEditorAction('toggle-progress', first ?? base);
         const third = widget.handleEditorAction('toggle-progress', second ?? base);
         const fourth = widget.handleEditorAction('toggle-progress', third ?? base);
+        const fifth = widget.handleEditorAction('toggle-progress', fourth ?? base);
 
         expect(first?.metadata?.display).toBe('progress');
         expect(second?.metadata?.display).toBe('slider');
         expect(third?.metadata?.display).toBe('slider-only');
-        expect(fourth?.metadata?.display).toBe('progress-short');
+        expect(fourth?.metadata?.display).toBe('line');
+        expect(fifth?.metadata?.display).toBe('progress-short');
+    });
+
+    it('renders a thin 细线进度条 in line mode', () => {
+        const context: RenderContext = {
+            data: {
+                context_window: {
+                    context_window_size: 200000,
+                    current_usage: {
+                        input_tokens: 20000,
+                        output_tokens: 10000,
+                        cache_creation_input_tokens: 5000,
+                        cache_read_input_tokens: 5000
+                    }
+                }
+            }
+        };
+        const item: WidgetItem = { id: 'ctx', type: 'context-bar', metadata: { display: 'line' } };
+        const widget = new ContextBarWidget();
+
+        expect(widget.render(item, context, DEFAULT_SETTINGS)).toBe(`上下文: ${'━'.repeat(2)}${'─'.repeat(14)} 30k/200k (15%)`);
+        expect(widget.getEditorDisplay(item).modifierText).toBe('(细线进度条)');
+    });
+
+    it('formats context preview samples with the selected styles', () => {
+        const context: RenderContext = { isPreview: true };
+
+        expect(new ContextLengthWidget().render({
+            id: 'length',
+            type: 'context-length',
+            numberFormat: { style: 'whole' }
+        }, context, DEFAULT_SETTINGS)).toBe('上下文: 19k');
+        expect(new ContextWindowWidget().render({
+            id: 'window',
+            type: 'context-window',
+            numberFormat: { decimals: 2 }
+        }, context, DEFAULT_SETTINGS)).toBe('窗口: 200.00k');
+        expect(new ContextBarWidget().render({
+            id: 'bar',
+            type: 'context-bar',
+            numberFormat: { decimals: 2 }
+        }, context, DEFAULT_SETTINGS)).toBe('上下文: [bar:25.0:16] 50.00k/200.00k (25.00%)');
     });
 });

@@ -1,14 +1,15 @@
 import {
     execFile,
     execFileSync
-} from 'child_process';
-import * as fs from 'fs';
+} from 'node:child_process';
+import * as fs from 'node:fs';
 
 import type { PackageCommandAvailability } from './claude-settings';
 import {
     getCommandResolutionPaths,
     getExpectedGlobalBinDir,
     getPersistentCommandResolutionPaths,
+    getRealDirectory,
     isPathInsideDir,
     type GlobalPackageManager
 } from './global-command-resolution';
@@ -132,25 +133,30 @@ function getDirectoryName(filePath: string): string {
 }
 
 function getComparablePath(filePath: string): string {
-    return filePath.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+    const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '');
+
+    return isWindowsStylePath(normalized) || normalized.startsWith('/mnt/')
+        ? normalized.toLowerCase()
+        : normalized;
 }
 
-function getUniqueResolvedDirs(resolvedPaths: string[]): string[] {
+// The first listed path in each directory, comparing directories with symlinks
+// resolved: one path per install, starting with the active one
+function getOnePathPerDirectory(resolvedPaths: string[]): string[] {
     const seen = new Set<string>();
-    const dirs: string[] = [];
+    const paths: string[] = [];
 
     for (const resolvedPath of resolvedPaths) {
-        const dir = getDirectoryName(resolvedPath);
-        const comparableDir = getComparablePath(dir);
+        const comparableDir = getComparablePath(getRealDirectory(getDirectoryName(resolvedPath)));
         if (seen.has(comparableDir)) {
             continue;
         }
 
         seen.add(comparableDir);
-        dirs.push(dir);
+        paths.push(resolvedPath);
     }
 
-    return dirs;
+    return paths;
 }
 
 function formatPathList(paths: string[]): string {
@@ -302,9 +308,9 @@ function getActiveResolutionWarning(
         return '⚠ 当前 PATH 中找不到 ccstatusline-zh，Claude Code 会直接调用 ccstatusline-zh，请重启终端或更新 PATH。';
     }
 
-    const resolvedDirs = getUniqueResolvedDirs(resolvedPaths);
-    if (resolvedDirs.length > 1) {
-        return `⚠ PATH 中存在多个 ccstatusline-zh 可执行文件，Claude Code 将使用第一个匹配：${active.resolvedPath}。\n其他匹配：${formatPathList(resolvedPaths.slice(1))}`;
+    const installPaths = getOnePathPerDirectory(resolvedPaths);
+    if (installPaths.length > 1) {
+        return `⚠ PATH 中存在多个 ccstatusline-zh 可执行文件，Claude Code 将使用第一个匹配：${active.resolvedPath}。\n其他匹配：${formatPathList(installPaths.slice(1))}`;
     }
 
     if (active.packageManager === 'unknown') {

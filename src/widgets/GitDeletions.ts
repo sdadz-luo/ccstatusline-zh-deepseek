@@ -1,58 +1,27 @@
-import type { RenderContext } from '../types/RenderContext';
-import type { Settings } from '../types/Settings';
-import type {
-    CustomKeybind,
-    Widget,
-    WidgetEditorDisplay,
-    WidgetItem
-} from '../types/Widget';
-import {
-    getGitChangeCounts,
-    isInsideGitWorkTree
-} from '../utils/git';
+import type { WidgetItem } from '../types/Widget';
+import type { GitChangeCounts } from '../utils/git';
 
+import { GitLineCountWidget } from './shared/git-count-widget';
 import {
-    getHideNoGitKeybinds,
-    getHideNoGitModifierText,
-    handleToggleNoGitAction,
-    isHideNoGitEnabled
-} from './shared/git-no-git';
+    getSlotSymbol,
+    type SymbolSlot
+} from './shared/symbol-override';
 
-export class GitDeletionsWidget implements Widget {
+const DELETIONS_SLOT: SymbolSlot = { id: 'symbolDeletions', label: '删除', defaultSymbol: '-' };
+
+export class GitDeletionsWidget extends GitLineCountWidget {
+    protected readonly zeroLabel = '删除行数为零时';
+    protected readonly slots = [DELETIONS_SLOT];
+
     getDefaultColor(): string { return 'red'; }
     getDescription(): string { return '显示 Git 删除行数'; }
     getDisplayName(): string { return 'Git 删除'; }
-    getCategory(): string { return 'Git'; }
-    getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
-        return {
-            displayText: this.getDisplayName(),
-            modifierText: getHideNoGitModifierText(item)
-        };
+
+    protected isZero(changes: GitChangeCounts): boolean {
+        return changes.deletions === 0;
     }
 
-    handleEditorAction(action: string, item: WidgetItem): WidgetItem | null {
-        return handleToggleNoGitAction(action, item);
+    protected formatCounts(item: WidgetItem, changes: GitChangeCounts): string {
+        return `${getSlotSymbol(item, DELETIONS_SLOT)}${changes.deletions}`;
     }
-
-    render(item: WidgetItem, context: RenderContext, _settings: Settings): string | null {
-        const hideNoGit = isHideNoGitEnabled(item);
-
-        if (context.isPreview) {
-            return '-10';
-        }
-
-        if (!isInsideGitWorkTree(context)) {
-            return hideNoGit ? null : '(无 Git)';
-        }
-
-        const changes = getGitChangeCounts(context);
-        return `-${changes.deletions}`;
-    }
-
-    getCustomKeybinds(): CustomKeybind[] {
-        return getHideNoGitKeybinds();
-    }
-
-    supportsRawValue(): boolean { return false; }
-    supportsColors(item: WidgetItem): boolean { return true; }
 }

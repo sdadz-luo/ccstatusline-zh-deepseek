@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import {
     Box,
     Text,
@@ -15,8 +14,16 @@ import type {
     WidgetEditorProps,
     WidgetItem
 } from '../types/Widget';
-import { getVisibleText } from '../utils/ansi';
+import {
+    getVisibleText,
+    stripSgrCodes
+} from '../utils/ansi';
+import { runCustomCommand } from '../utils/custom-command';
 import { shouldInsertInput } from '../utils/input-guards';
+
+import { BlinkingCursor } from './shared/BlinkingCursor';
+import { applyMaxWidth } from './shared/max-width';
+import { getAdjacentBoundaries } from './shared/text-cursor';
 
 export class CustomCommandWidget implements Widget {
     getDefaultColor(): string { return 'white'; }
@@ -56,53 +63,53 @@ export class CustomCommandWidget implements Widget {
 
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
         if (context.isPreview) {
-            return item.commandPath ? `[cmd: ${item.commandPath.substring(0, 20)}${item.commandPath.length > 20 ? '...' : ''}]` : '[No command]';
+            return item.commandPath ? `[命令: ${item.commandPath.substring(0, 20)}${item.commandPath.length > 20 ? '...' : ''}]` : '[未设置命令]';
         } else if (item.commandPath && context.data) {
-            try {
-                const timeout = item.timeout ?? 1000;
-                const jsonInput = JSON.stringify(context.data);
-                let output = execSync(item.commandPath, {
-                    encoding: 'utf8',
-                    input: jsonInput,
-                    timeout: timeout,
-                    stdio: ['pipe', 'pipe', 'ignore'],
-                    env: process.env,
-                    windowsHide: true
-                }).trim();
+            const payload = context.rawData ?? context.data;
+            const jsonInput = JSON.stringify(
+                typeof context.terminalWidth === 'number'
+                    ? { ...payload, terminal_width: context.terminalWidth }
+                    : payload
+            );
+            const result = runCustomCommand({
+                command: item.commandPath,
+                input: jsonInput,
+                timeoutMs: item.timeout ?? 1000,
+                ttlSeconds: context.customCommandCacheTtlSeconds,
+                sessionId: context.data.session_id,
+                terminalWidth: context.terminalWidth
+            });
 
-                // Strip ANSI codes if preserveColors is false
-                if (!item.preserveColors) {
-                    // Strip ANSI/OSC escape sequences and keep only visible text
-                    output = getVisibleText(output);
-                }
-
-                if (item.maxWidth && output.length > item.maxWidth) {
-                    output = output.substring(0, item.maxWidth - 3) + '...';
-                }
-
-                return output || null;
-            } catch (error) {
-                // Provide more specific error messages
-                if (error instanceof Error) {
-                    const execError = error as Error & {
-                        code?: string;
-                        signal?: string;
-                        status?: number;
-                    };
-                    if (execError.code === 'ENOENT') {
-                        return '[命令未找到]';
-                    } else if (execError.code === 'ETIMEDOUT') {
-                        return '[超时]';
-                    } else if (execError.code === 'EACCES') {
-                        return '[权限不足]';
-                    } else if (execError.signal) {
-                        return `[Signal: ${execError.signal}]`;
-                    } else if (execError.status !== undefined) {
-                        return `[Exit: ${execError.status}]`;
-                    }
-                }
-                return '[错误]';
+            if (result.status === 'failed') {
+                return result.marker;
             }
+
+            let output = result.stdout;
+
+            // Strip ANSI codes if preserveColors is false
+            if (!item.preserveColors) {
+                // Strip ANSI/OSC escape sequences and keep only visible text
+                output = getVisibleText(output);
+            }
+
+            // Output with no visible text, such as color codes around an empty
+            // value, renders empty whether or not its colors are preserved
+            if (!getVisibleText(output)) {
+                return null;
+            }
+
+            // Truncate by display columns, skipping escape sequences and never
+            // splitting a grapheme. A cut can drop the command's own trailing
+            // reset, so close any SGR styling it left open; otherwise the
+            // colour bleeds into the separators and widgets that follow.
+            const truncated = applyMaxWidth(output, item.maxWidth);
+            if (truncated !== output && stripSgrCodes(truncated) !== truncated) {
+                output = `${truncated}\x1b[0m`;
+            } else {
+                output = truncated;
+            }
+
+            return output || null;
         }
         return null;
     }
@@ -118,6 +125,10 @@ export class CustomCommandWidget implements Widget {
 
     renderEditor(props: WidgetEditorProps): React.ReactElement {
         return <CustomCommandEditor {...props} />;
+    }
+
+    preservesRenderedColors(item: WidgetItem): boolean {
+        return item.preserveColors === true;
     }
 
     supportsRawValue(): boolean { return false; }
@@ -143,6 +154,9 @@ const CustomCommandEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, 
     const [commandCursorPos, setCommandCursorPos] = useState(commandInput.length);
     const [widthInput, setWidthInput] = useState(widget.maxWidth?.toString() ?? '');
     const [timeoutInput, setTimeoutInput] = useState(widget.timeout?.toString() ?? '1000');
+    const { previous, next } = getAdjacentBoundaries(commandInput, commandCursorPos);
+    // The grapheme under the cursor ends here, so an emoji is drawn whole
+    const cursorEnd = next ?? commandInput.length;
 
     useInput((input, key) => {
         if (mode === 'command') {
@@ -151,17 +165,17 @@ const CustomCommandEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, 
             } else if (key.escape) {
                 onCancel();
             } else if (key.leftArrow) {
-                setCommandCursorPos(Math.max(0, commandCursorPos - 1));
+                setCommandCursorPos(previous ?? commandCursorPos);
             } else if (key.rightArrow) {
-                setCommandCursorPos(Math.min(commandInput.length, commandCursorPos + 1));
+                setCommandCursorPos(next ?? commandCursorPos);
             } else if (key.backspace) {
-                if (commandCursorPos > 0) {
-                    setCommandInput(commandInput.slice(0, commandCursorPos - 1) + commandInput.slice(commandCursorPos));
-                    setCommandCursorPos(commandCursorPos - 1);
+                if (previous !== undefined) {
+                    setCommandInput(commandInput.slice(0, previous) + commandInput.slice(commandCursorPos));
+                    setCommandCursorPos(previous);
                 }
             } else if (key.delete) {
-                if (commandCursorPos < commandInput.length) {
-                    setCommandInput(commandInput.slice(0, commandCursorPos) + commandInput.slice(commandCursorPos + 1));
+                if (next !== undefined) {
+                    setCommandInput(commandInput.slice(0, commandCursorPos) + commandInput.slice(next));
                 }
             } else if (shouldInsertInput(input, key)) {
                 setCommandInput(commandInput.slice(0, commandCursorPos) + input + commandInput.slice(commandCursorPos));
@@ -169,12 +183,11 @@ const CustomCommandEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, 
             }
         } else if (mode === 'width') {
             if (key.return) {
-                const width = parseInt(widthInput, 10);
-                if (!isNaN(width) && width > 0) {
+                const width = Number.parseInt(widthInput, 10);
+                if (!Number.isNaN(width) && width > 0) {
                     onComplete({ ...widget, maxWidth: width });
                 } else {
                     const { maxWidth, ...rest } = widget;
-                    void maxWidth; // Intentionally unused
                     onComplete(rest);
                 }
             } else if (key.escape) {
@@ -186,12 +199,11 @@ const CustomCommandEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, 
             }
         } else if (mode === 'timeout') {
             if (key.return) {
-                const timeout = parseInt(timeoutInput, 10);
-                if (!isNaN(timeout) && timeout > 0) {
+                const timeout = Number.parseInt(timeoutInput, 10);
+                if (!Number.isNaN(timeout) && timeout > 0) {
                     onComplete({ ...widget, timeout });
                 } else {
                     const { timeout, ...rest } = widget;
-                    void timeout; // Intentionally unused
                     onComplete(rest);
                 }
             } else if (key.escape) {
@@ -208,38 +220,38 @@ const CustomCommandEditor: React.FC<WidgetEditorProps> = ({ widget, onComplete, 
         return (
             <Box flexDirection='column'>
                 <Text>
-                    Enter command path:
+                    输入命令路径：
                     {' '}
                     {commandInput.slice(0, commandCursorPos)}
-                    <Text backgroundColor='gray' color='black'>{commandInput[commandCursorPos] ?? ' '}</Text>
-                    {commandInput.slice(commandCursorPos + 1)}
+                    <BlinkingCursor>{commandInput.slice(commandCursorPos, cursorEnd) || ' '}</BlinkingCursor>
+                    {commandInput.slice(cursorEnd)}
                 </Text>
-                <Text dimColor>←→ move cursor, Enter save, ESC cancel</Text>
+                <Text dimColor>←→ 移动光标，Enter 保存，ESC 取消</Text>
             </Box>
         );
     } else if (mode === 'width') {
         return (
             <Box flexDirection='column'>
                 <Box>
-                    <Text>Enter max width (blank for no limit): </Text>
+                    <Text>输入最大宽度（留空表示不限制）： </Text>
                     <Text>{widthInput}</Text>
-                    <Text backgroundColor='gray' color='black'>{' '}</Text>
+                    <BlinkingCursor>{' '}</BlinkingCursor>
                 </Box>
-                <Text dimColor>Press Enter to save, ESC to cancel</Text>
+                <Text dimColor>按 Enter 保存，ESC 取消</Text>
             </Box>
         );
     } else if (mode === 'timeout') {
         return (
             <Box flexDirection='column'>
                 <Box>
-                    <Text>Enter timeout in milliseconds (default 1000): </Text>
+                    <Text>输入超时时长（毫秒，默认 1000）： </Text>
                     <Text>{timeoutInput}</Text>
-                    <Text backgroundColor='gray' color='black'>{' '}</Text>
+                    <BlinkingCursor>{' '}</BlinkingCursor>
                 </Box>
-                <Text dimColor>Press Enter to save, ESC to cancel</Text>
+                <Text dimColor>按 Enter 保存，ESC 取消</Text>
             </Box>
         );
     }
 
-    return <Text>Unknown editor mode</Text>;
+    return <Text>未知编辑模式</Text>;
 };

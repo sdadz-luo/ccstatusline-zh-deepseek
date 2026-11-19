@@ -2,6 +2,7 @@ import type { RenderContext } from '../types/RenderContext';
 import type { Settings } from '../types/Settings';
 import type { TokenBreakdown } from '../types/TokenMetrics';
 import type {
+    HideableState,
     Widget,
     WidgetEditorDisplay,
     WidgetItem
@@ -11,6 +12,13 @@ import {
     isDeepSeekPeakHour,
     type DeepSeekRates
 } from '../utils/deepseek-pricing';
+import {
+    formatCost,
+    resolveNumberFormat
+} from '../utils/number-format';
+
+import { isHidden } from './shared/hideable';
+import { formatRawOrLabeledValue } from './shared/raw-or-labeled';
 
 // 供应商/代理会改写模型标识（deepseek-flash[1m]、deepseek-v4-flash、deepseek-v4.1-flash…），
 // 只认 "deepseek" + "flash" 双关键词，免得模型升级改名后费用段落静默消失。
@@ -81,25 +89,39 @@ export function peakAwareDefaultColor(context: RenderContext | undefined, now: D
     return isDeepSeekPeakHour(now) ? 'red' : 'green';
 }
 
+const LABEL = '费用: ';
+
+const ZERO_HIDEABLE_STATE: HideableState = { key: 'zero', label: '费用为 $0.00 时' };
+
 export class SessionCostWidget implements Widget {
     getDefaultColor(context?: RenderContext): string { return peakAwareDefaultColor(context, new Date()); }
     getDescription(): string { return '显示当前会话总费用（美元）'; }
     getDisplayName(): string { return '会话费用'; }
     getCategory(): string { return '会话'; }
+    getLabelPrefix(): string { return LABEL; }
     getEditorDisplay(item: WidgetItem): WidgetEditorDisplay {
         return { displayText: this.getDisplayName() };
     }
 
+    getHideableStates(): HideableState[] {
+        return [ZERO_HIDEABLE_STATE];
+    }
+
     render(item: WidgetItem, context: RenderContext, settings: Settings): string | null {
+        const format = resolveNumberFormat('cost', item, settings);
         if (context.isPreview) {
-            return item.rawValue ? '$2.45' : '费用: $2.45';
+            const value = formatCost(2.45, format);
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), value);
         }
 
         const deepSeekCost = calculateDeepSeekCost(context);
         if (deepSeekCost !== null) {
-            const formattedCost = `$${deepSeekCost.toFixed(2)}`;
+            const roundsToZeroCents = deepSeekCost >= 0 && deepSeekCost < 0.005;
+            if (roundsToZeroCents && isHidden(item, ZERO_HIDEABLE_STATE.key)) {
+                return null;
+            }
 
-            return item.rawValue ? formattedCost : `费用: ${formattedCost}`;
+            return formatRawOrLabeledValue(item, this.getLabelPrefix(), formatCost(deepSeekCost, format));
         }
 
         const totalCost = context.data?.cost?.total_cost_usd;
@@ -107,12 +129,18 @@ export class SessionCostWidget implements Widget {
             return null;
         }
 
-        // Format the cost to 2 decimal places
-        const formattedCost = `$${totalCost.toFixed(2)}`;
+        // Keep the zero-state threshold tied to the baseline cent precision,
+        // independent of the selected display style or decimal override.
+        const roundsToZeroCents = totalCost >= 0 && totalCost < 0.005;
+        if (roundsToZeroCents && isHidden(item, ZERO_HIDEABLE_STATE.key)) {
+            return null;
+        }
 
-        return item.rawValue ? formattedCost : `费用: ${formattedCost}`;
+        const formattedCost = formatCost(totalCost, format);
+        return formatRawOrLabeledValue(item, this.getLabelPrefix(), formattedCost);
     }
 
     supportsRawValue(): boolean { return true; }
     supportsColors(item: WidgetItem): boolean { return true; }
+    supportsNumberFormat(): boolean { return true; }
 }

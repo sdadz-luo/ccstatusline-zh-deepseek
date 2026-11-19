@@ -10,6 +10,8 @@ const BEL = '\x07';
 const C1_CSI = '\x9b';
 const C1_OSC = '\x9d';
 const ST = '\x9c';
+// What follows ESC in a DCS, SOS, PM or APC string
+const STRING_INTRODUCERS = new Set(['P', 'X', '^', '_']);
 const ZERO_WIDTH_JOINER = 0x200d;
 const COMBINING_ENCLOSING_KEYCAP = 0x20e3;
 const VARIATION_SELECTOR_START = 0xfe00;
@@ -19,7 +21,16 @@ const VARIATION_SELECTOR_SUPPLEMENT_END = 0xe01ef;
 const REGIONAL_INDICATOR_START = 0x1f1e6;
 const REGIONAL_INDICATOR_END = 0x1f1ff;
 
-const SGR_REGEX = /\x1b\[[0-9;]*m/g;
+// Color codes, written with ESC [ or the 8-bit CSI, and with ; or the ITU
+// colons (38:5:196) between parameters
+const SGR_REGEX = /(?:\x1b\[|\x9b)[0-9;:]*m/g;
+// Lowest code point that can extend a display cluster (U+0300 is the first
+// \p{Mark}; ZWJ, variation selectors, the keycap and emoji modifiers are all
+// higher), so a printable ASCII character followed by anything below it is a
+// one-column cluster on its own.
+const FIRST_CLUSTER_EXTENDER = 0x300;
+const CLUSTER_WIDTH_CACHE_LIMIT = 4096;
+const clusterWidthCache = new Map<string, number>();
 const EXTENDED_PICTOGRAPHIC_REGEX = createUnicodePropertyRegex('\\p{Extended_Pictographic}');
 const EMOJI_PRESENTATION_REGEX = createUnicodePropertyRegex('\\p{Emoji_Presentation}');
 const EMOJI_MODIFIER_REGEX = createUnicodePropertyRegex('\\p{Emoji_Modifier}');
@@ -142,8 +153,8 @@ function isZeroWidthStandaloneCluster(cluster: string): boolean {
     });
 }
 
-function shouldTreatClusterAsNarrowTextPictograph(cluster: string): boolean {
-    if (stringWidth(cluster) <= 1) {
+function shouldTreatClusterAsNarrowTextPictograph(cluster: string, clusterStringWidth: number): boolean {
+    if (clusterStringWidth <= 1) {
         return false;
     }
 
@@ -171,16 +182,47 @@ function shouldTreatClusterAsNarrowTextPictograph(cluster: string): boolean {
     return characters.some(character => matchesUnicodeProperty(character, EXTENDED_PICTOGRAPHIC_REGEX));
 }
 
-function getClusterWidth(cluster: string): number {
+function isPrintableAscii(charCode: number): boolean {
+    return charCode >= 0x20 && charCode <= 0x7e;
+}
+
+function computeClusterWidth(cluster: string): number {
     if (cluster.length === 0 || isZeroWidthStandaloneCluster(cluster)) {
         return 0;
     }
 
-    if (shouldTreatClusterAsNarrowTextPictograph(cluster)) {
+    // The sanitizer prints a tab as one space
+    if (cluster.startsWith('\t')) {
         return 1;
     }
 
-    return stringWidth(cluster);
+    const clusterStringWidth = stringWidth(cluster);
+    if (shouldTreatClusterAsNarrowTextPictograph(cluster, clusterStringWidth)) {
+        return 1;
+    }
+
+    return clusterStringWidth;
+}
+
+// A cluster's width depends only on its text, and a render measures the same
+// handful of clusters (separators, bar glyphs, icons) many times over, so the
+// Unicode property checks and string-width calls are memoised per process.
+function getClusterWidth(cluster: string): number {
+    if (cluster.length === 1 && isPrintableAscii(cluster.charCodeAt(0))) {
+        return 1;
+    }
+
+    const cached = clusterWidthCache.get(cluster);
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const width = computeClusterWidth(cluster);
+    if (clusterWidthCache.size >= CLUSTER_WIDTH_CACHE_LIMIT) {
+        clusterWidthCache.clear();
+    }
+    clusterWidthCache.set(cluster, width);
+    return width;
 }
 
 function getTextDisplayWidth(text: string): number {
@@ -188,6 +230,17 @@ function getTextDisplayWidth(text: string): number {
     let index = 0;
 
     while (index < text.length) {
+        // Fast path: a printable ASCII character that nothing can extend is a
+        // one-column cluster, so skip the cluster scan entirely.
+        if (isPrintableAscii(text.charCodeAt(index))) {
+            const nextIndex = index + 1;
+            if (nextIndex >= text.length || text.charCodeAt(nextIndex) < FIRST_CLUSTER_EXTENDER) {
+                width += 1;
+                index = nextIndex;
+                continue;
+            }
+        }
+
         const cluster = consumeDisplayCluster(text, index);
         if (!cluster) {
             break;
@@ -293,6 +346,62 @@ function parseOsc(
     };
 }
 
+// The bytes after ESC in ESC ( B and the like: intermediate bytes, then a
+// final byte. Past the end of the input, codePointAt gives undefined, which is
+// neither.
+function isIntermediateByte(codePoint: number | undefined): boolean {
+    return codePoint !== undefined && codePoint >= 0x20 && codePoint <= 0x2f;
+}
+
+function isEscapeFinalByte(codePoint: number | undefined): boolean {
+    return codePoint !== undefined && codePoint >= 0x30 && codePoint <= 0x7e;
+}
+
+function sliceSequence(input: string, start: number, end: number): ParsedEscapeSequence {
+    return {
+        nextIndex: end,
+        sequence: input.slice(start, end)
+    };
+}
+
+// A DCS, SOS, PM or APC string, which the terminal swallows up to ST or BEL.
+// Any other ESC starts a new sequence, so an unterminated string doesn't hide
+// the text after it.
+function parseControlString(input: string, start: number): ParsedEscapeSequence {
+    for (let index = start + 2; index < input.length; index++) {
+        const current = input[index];
+        if (current === BEL || current === ST) {
+            return sliceSequence(input, start, index + 1);
+        }
+        if (current === ESC) {
+            return sliceSequence(input, start, input[index + 1] === '\\' ? index + 2 : index);
+        }
+    }
+
+    return sliceSequence(input, start, input.length);
+}
+
+// ESC and a character other than [ or ]
+function parseOtherEscape(input: string, start: number): ParsedEscapeSequence {
+    const next = input.charAt(start + 1);
+    if (STRING_INTRODUCERS.has(next)) {
+        return parseControlString(input, start);
+    }
+
+    // ESC, intermediate bytes, then a final byte: ESC ( B selects a character
+    // set (`tput sgr0` prints it), ESC # 8 fills the screen
+    if (isIntermediateByte(next.codePointAt(0))) {
+        let end = start + 2;
+        while (end < input.length && isIntermediateByte(input.codePointAt(end))) {
+            end++;
+        }
+        return sliceSequence(input, start, isEscapeFinalByte(input.codePointAt(end)) ? end + 1 : end);
+    }
+
+    // ESC 7, ESC c and the like
+    return sliceSequence(input, start, start + 2);
+}
+
 function parseEscapeSequence(input: string, index: number): ParsedEscapeSequence | null {
     const current = input[index];
     if (!current) {
@@ -308,10 +417,7 @@ function parseEscapeSequence(input: string, index: number): ParsedEscapeSequence
             return parseOsc(input, index, index + 2);
         }
         if (next) {
-            return {
-                nextIndex: index + 2,
-                sequence: input.slice(index, index + 2)
-            };
+            return parseOtherEscape(input, index);
         }
         return {
             nextIndex: input.length,
@@ -337,8 +443,100 @@ function getOsc8CloseSequence(terminator: OscTerminator): string {
     return `${ESC}]8;;${ESC}\\`;
 }
 
+function nextOsc8Terminator(escape: ParsedEscapeSequence, current: OscTerminator | null): OscTerminator | null {
+    if (escape.osc8Action === 'open') {
+        return escape.osc8Terminator ?? 'st';
+    }
+    if (escape.osc8Action === 'close') {
+        return null;
+    }
+    return current;
+}
+
 export function stripSgrCodes(text: string): string {
     return text.replace(SGR_REGEX, '');
+}
+
+// What an SGR parameter does to an attribute: clears it, sets it, or leaves
+// it alone (undefined)
+type SgrEffect = 'clear' | 'set' | undefined;
+
+// The background is cleared by 0 (also an empty parameter) and 49
+function getBackgroundEffect(param: number | undefined): SgrEffect {
+    if (param === 0 || param === 49) {
+        return 'clear';
+    }
+    if (param !== undefined && ((param >= 40 && param <= 47) || (param >= 100 && param <= 107) || param === 48)) {
+        return 'set';
+    }
+    return undefined;
+}
+
+// Bold (set by 1) and dim (set by 2) are both cleared by 0 and 22
+function getIntensityEffect(param: number | undefined, setBy: 1 | 2): SgrEffect {
+    if (param === 0 || param === 22) {
+        return 'clear';
+    }
+    return param === setBy ? 'set' : undefined;
+}
+
+interface SgrClears {
+    background: boolean;
+    bold: boolean;
+    dim: boolean;
+}
+
+// Track each attribute's operations in order: a later explicit setting
+// overrides a reset. Skip extended color arguments so their values aren't
+// mistaken for resets or background operations. Written with colons
+// (38:5:196, 48:2::255:0:0), an extended color holds its arguments in its own
+// parameter, so there is nothing after it to skip.
+function getSgrClears(sequence: string): SgrClears {
+    const introducerLength = sequence.startsWith(C1_CSI) ? 1 : 2;
+    const fields = sequence.slice(introducerLength, -1).split(';');
+    const params = fields.map(param => Number.parseInt(param || '0', 10));
+    const clears: SgrClears = { background: false, bold: false, dim: false };
+    const track = (attribute: keyof SgrClears, effect: SgrEffect) => {
+        if (effect) {
+            clears[attribute] = effect === 'clear';
+        }
+    };
+    for (let i = 0; i < params.length; i++) {
+        const param = params[i];
+        track('background', getBackgroundEffect(param));
+        track('bold', getIntensityEffect(param, 1));
+        track('dim', getIntensityEffect(param, 2));
+        if ((param === 38 || param === 48 || param === 58) && !fields[i]?.includes(':')) {
+            i += params[i + 1] === 5 ? 2 : 4;
+        }
+    }
+    return clears;
+}
+
+// The styling restoreStyleAfterResets re-applies, with the background as the
+// SGR code that sets it
+export interface RestoredStyle {
+    background?: string;
+    bold?: boolean;
+    dim?: boolean;
+}
+
+// Re-apply a widget's own styling after each SGR sequence in the text that
+// clears it, so text that resets its own styling keeps the background, bold
+// and dim it's drawn with.
+export function restoreStyleAfterResets(text: string, style: RestoredStyle): string {
+    const background = style.background ?? '';
+    if (!background && !style.bold && !style.dim) {
+        return text;
+    }
+
+    return text.replace(SGR_REGEX, (sequence) => {
+        const clears = getSgrClears(sequence);
+        return sequence
+            + (style.bold && clears.bold ? '\x1b[1m' : '')
+            + (style.dim && clears.dim ? '\x1b[2m' : '')
+            + (clears.background ? background : '');
+    });
 }
 
 export function stripOscCodes(text: string): string {
@@ -369,6 +567,10 @@ export function stripOscCodes(text: string): string {
     return result;
 }
 
+function isEscapeIntroducer(character: string | undefined): boolean {
+    return character === ESC || character === C1_CSI || character === C1_OSC;
+}
+
 export function getVisibleText(text: string): string {
     let result = '';
     let index = 0;
@@ -380,17 +582,32 @@ export function getVisibleText(text: string): string {
             continue;
         }
 
-        const codePoint = text.codePointAt(index);
-        if (codePoint === undefined) {
-            break;
+        // Copy the whole run up to the next escape introducer in one slice
+        // rather than one code point at a time.
+        let runEnd = index + 1;
+        while (runEnd < text.length && !isEscapeIntroducer(text[runEnd])) {
+            runEnd++;
         }
 
-        const character = String.fromCodePoint(codePoint);
-        result += character;
-        index += character.length;
+        result += text.slice(index, runEnd);
+        index = runEnd;
     }
 
     return result;
+}
+
+// A space right after a Private Use Area character (Nerd Font icons), possibly
+// after color codes or link closers, becomes an EN SPACE: Ghostty and kitty
+// only draw such an icon two cells wide when the next cell is U+0020 or
+// U+2002, and U+00A0 keeps it at one. Powerline separators (U+E0B0-U+E0D7)
+// are left out: they're drawn one cell wide.
+const PUA_THEN_SPACE_REGEX = /([\uE000-\uE0AF\uE0D8-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}](?:\x1b\[[0-9;:]*m|\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\))*) /gu;
+
+// Swaps spaces for characters that editors like VS Code do not trim.
+export function replaceSpacesForOutput(text: string): string {
+    return text
+        .replace(PUA_THEN_SPACE_REGEX, '$1\u2002')
+        .replace(/ /g, '\u00A0');
 }
 
 export function getVisibleWidth(text: string): number {
@@ -432,32 +649,24 @@ export function truncateStyledText(
     let didTruncate = false;
     let openOsc8Terminator: OscTerminator | null = null;
 
+    // Measure clusters on the escape-stripped text, exactly as getVisibleWidth
+    // does. Measuring each run between escapes separately splits a cluster
+    // that straddles an escape (U+2764, SGR, U+FE0F) into narrower pieces, so
+    // the loop could finish without overshooting and return the whole,
+    // over-wide input below.
+    const visibleText = getVisibleText(text);
+    let visibleIndex = 0;
+
     while (index < text.length) {
         const escape = parseEscapeSequence(text, index);
         if (escape) {
             output += escape.sequence;
             index = escape.nextIndex;
-
-            if (escape.osc8Action === 'open') {
-                openOsc8Terminator = escape.osc8Terminator ?? 'st';
-            } else if (escape.osc8Action === 'close') {
-                openOsc8Terminator = null;
-            }
+            openOsc8Terminator = nextOsc8Terminator(escape, openOsc8Terminator);
             continue;
         }
 
-        let visibleSegmentEnd = index;
-        while (visibleSegmentEnd < text.length && !parseEscapeSequence(text, visibleSegmentEnd)) {
-            const codePoint = text.codePointAt(visibleSegmentEnd);
-            if (codePoint === undefined) {
-                break;
-            }
-
-            visibleSegmentEnd += String.fromCodePoint(codePoint).length;
-        }
-
-        const visibleSegment = text.slice(index, visibleSegmentEnd);
-        const cluster = consumeDisplayCluster(visibleSegment, 0);
+        const cluster = consumeDisplayCluster(visibleText, visibleIndex);
         if (!cluster) {
             break;
         }
@@ -469,9 +678,30 @@ export function truncateStyledText(
             break;
         }
 
-        output += cluster.text;
+        // Copy the cluster's code units, and any escapes that sit inside it.
+        let remaining = cluster.text.length;
+        while (remaining > 0 && index < text.length) {
+            const inner = parseEscapeSequence(text, index);
+            if (inner) {
+                output += inner.sequence;
+                index = inner.nextIndex;
+                openOsc8Terminator = nextOsc8Terminator(inner, openOsc8Terminator);
+                continue;
+            }
+
+            const codePoint = text.codePointAt(index);
+            if (codePoint === undefined) {
+                break;
+            }
+
+            const character = String.fromCodePoint(codePoint);
+            output += character;
+            index += character.length;
+            remaining -= character.length;
+        }
+
         currentWidth += clusterWidth;
-        index += cluster.text.length;
+        visibleIndex = cluster.nextIndex;
     }
 
     if (!didTruncate) {

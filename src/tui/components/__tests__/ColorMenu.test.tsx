@@ -1,6 +1,7 @@
 import { render } from 'ink';
 import { PassThrough } from 'node:stream';
 import React from 'react';
+import stripAnsi from 'strip-ansi';
 import {
     describe,
     expect,
@@ -10,7 +11,14 @@ import {
 
 import { DEFAULT_SETTINGS } from '../../../types/Settings';
 import type { WidgetItem } from '../../../types/Widget';
-import { ColorMenu } from '../ColorMenu';
+import {
+    letReactCatchUp,
+    waitFor
+} from '../../__tests__/helpers/wait-for-ink';
+import {
+    ColorMenu,
+    type ColorMenuProps
+} from '../ColorMenu';
 
 class MockTtyStream extends PassThrough {
     isTTY = true;
@@ -51,10 +59,42 @@ function createMockStdout(): CapturedWriteStream {
     });
 }
 
-function flushInk() {
-    return new Promise((resolve) => {
-        setTimeout(resolve, 25);
-    });
+function renderColorMenu(widgets: WidgetItem[]) {
+    const stdin = createMockStdin();
+    const stdout = createMockStdout();
+    const stderr = createMockStdout();
+    const onUpdate = vi.fn<ColorMenuProps['onUpdate']>();
+    const onBack = vi.fn<ColorMenuProps['onBack']>();
+    const instance = render(
+        React.createElement(ColorMenu, {
+            widgets,
+            settings: DEFAULT_SETTINGS,
+            onUpdate,
+            onBack
+        }),
+        {
+            stdin,
+            stdout,
+            stderr,
+            debug: true,
+            exitOnCtrlC: false,
+            patchConsole: false
+        }
+    );
+
+    return {
+        stdin,
+        onUpdate,
+        onBack,
+        latestFrame: () => stripAnsi(stdout.getOutput().split('配置颜色').at(-1) ?? ''),
+        cleanup: () => {
+            instance.unmount();
+            instance.cleanup();
+            stdin.destroy();
+            stdout.destroy();
+            stderr.destroy();
+        }
+    };
 }
 
 describe('ColorMenu', () => {
@@ -100,13 +140,18 @@ describe('ColorMenu', () => {
             }
         );
 
-        try {
-            await flushInk();
-            stdin.write('\x1B[B');
-            await flushInk();
+        const latestFrame = () => stdout.getOutput().split('配置颜色').at(-1) ?? '';
 
-            const latestFrame = stdout.getOutput().split('配置颜色').at(-1) ?? '';
-            const currentStyleLine = latestFrame
+        try {
+            await waitFor(() => {
+                expect(stripAnsi(latestFrame())).toContain('▶  1: 缓存命中率');
+            });
+            stdin.write('\x1B[B');
+            await waitFor(() => {
+                expect(stripAnsi(latestFrame())).toContain('▶  2: 缓存读取');
+            });
+
+            const currentStyleLine = latestFrame()
                 .split('\n')
                 .find(line => line.includes('当前') && line.includes('前景色')) ?? '';
 
@@ -118,5 +163,113 @@ describe('ColorMenu', () => {
             stdout.destroy();
             stderr.destroy();
         }
+    });
+
+    it('ignores digit keys instead of selecting the Back entry', async () => {
+        const menu = renderColorMenu([
+            { id: '1', type: 'model' },
+            { id: '2', type: 'version' }
+        ]);
+
+        try {
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('▶  1: 模型');
+            });
+
+            // 3 is the Back entry's position. A digit changes nothing on screen, so let Ink
+            // read it on its own before the arrow that shows the menu kept reading keys
+            menu.stdin.write('3');
+            await letReactCatchUp();
+            menu.stdin.write('\x1B[B');
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('▶  2: 版本');
+            });
+            expect(menu.onBack).not.toHaveBeenCalled();
+
+            menu.stdin.write('\x1B[B');
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('▶  ← 返回');
+            });
+            menu.stdin.write('\r');
+            await waitFor(() => {
+                expect(menu.onBack).toHaveBeenCalledTimes(1);
+            });
+        } finally {
+            menu.cleanup();
+        }
+    });
+
+    it('moves the highlight to the first widget when hiding the highlighted separator', async () => {
+        const menu = renderColorMenu([
+            { id: '1', type: 'model' },
+            { id: '2', type: 'separator' },
+            { id: '3', type: 'version' }
+        ]);
+
+        try {
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('(s)显示分隔符：OFF');
+            });
+
+            menu.stdin.write('s');
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('(s)显示分隔符：ON');
+            });
+            menu.stdin.write('\x1B[B');
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('▶  2: 分隔符');
+            });
+            menu.stdin.write('s');
+            await waitFor(() => {
+                expect(menu.latestFrame()).toContain('(s)显示分隔符：OFF');
+            });
+
+            expect(menu.latestFrame()).toContain('▶  1: 模型');
+            expect(menu.latestFrame()).toContain('当前 前景色');
+
+            menu.stdin.write('b');
+            await waitFor(() => {
+                expect(menu.onUpdate).toHaveBeenCalled();
+            });
+            expect(menu.onUpdate.mock.calls[0]?.[0]?.[0]).toMatchObject({ id: '1', bold: true });
+        } finally {
+            menu.cleanup();
+        }
+    });
+
+    it('explains which text the foreground still colors when a widget sets some colors itself', async () => {
+        const renderMenu = async (widget: WidgetItem) => {
+            const stdin = createMockStdin();
+            const stdout = createMockStdout();
+            const stderr = createMockStdout();
+            const instance = render(
+                React.createElement(ColorMenu, {
+                    widgets: [widget],
+                    settings: DEFAULT_SETTINGS,
+                    onUpdate: vi.fn(),
+                    onBack: vi.fn()
+                }),
+                { stdin, stdout, stderr, debug: true, exitOnCtrlC: false, patchConsole: false }
+            );
+
+            try {
+                await waitFor(() => {
+                    expect(stripAnsi(stdout.getOutput())).toContain('▶  1: 思考力度');
+                });
+                return stripAnsi(stdout.getOutput().split('配置颜色').at(-1) ?? '');
+            } finally {
+                instance.unmount();
+                instance.cleanup();
+                stdin.destroy();
+                stdout.destroy();
+                stderr.destroy();
+            }
+        };
+
+        const levelColored = await renderMenu({ id: '1', type: 'thinking-effort', metadata: { levelColors: 'true' } });
+        const singleColored = await renderMenu({ id: '1', type: 'thinking-effort' });
+
+        expect(levelColored).toContain('自行设置部分颜色');
+        expect(singleColored).not.toContain('自行设置部分颜色');
     });
 });
