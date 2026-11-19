@@ -119,9 +119,7 @@ function makeTranscriptLine(params: {
 // fork: TokenMetrics 额外携带峰谷分桶字段；上游用例精确匹配核心字段时剥离分桶，
 // 分桶本身由「峰谷分桶」相关用例单独覆盖。
 function expectTokenMetrics(metrics: TokenMetrics, expected: Partial<TokenMetrics>): void {
-    const { peakBreakdown, offPeakBreakdown, ...core } = metrics;
-    void peakBreakdown;
-    void offPeakBreakdown;
+    const { peakBreakdown: _peak, offPeakBreakdown: _offPeak, ...core } = metrics;
     expect(core).toEqual(expected);
 }
 

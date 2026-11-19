@@ -329,10 +329,16 @@ process.stdout.write(JSON.stringify({
     function runProbe(options: ProbeOptions): UsageProbeResult {
         const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => {
             const normalizedKey = key.toUpperCase();
+            // 本 Fork 的用量源判定（opencode 网关）读取这些网关环境变量；
+            // 子进程继承真实会话的配置会让 source 判定漂移，测试需在干净
+            // 环境下运行。
             return normalizedKey !== 'CLAUDE_CONFIG_DIR'
                 && normalizedKey !== 'CLAUDE_SECURESTORAGE_CONFIG_DIR'
                 && normalizedKey !== 'HTTPS_PROXY'
-                && normalizedKey !== 'NO_PROXY';
+                && normalizedKey !== 'NO_PROXY'
+                && normalizedKey !== 'ANTHROPIC_BASE_URL'
+                && normalizedKey !== 'ANTHROPIC_API_KEY'
+                && normalizedKey !== 'OPENCODE_API_KEY';
         }));
 
         Object.assign(env, {

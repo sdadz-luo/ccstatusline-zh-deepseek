@@ -110,6 +110,8 @@ const FABLE_USAGE_FIELDS = new Set<UsageDataField>([
 const WINDOW_RESET_FIELD_SENTINELS: Partial<Record<UsageDataField, UsageDataField>> = {
     sessionResetAt: 'sessionUsage',
     weeklyResetAt: 'weeklyUsage',
+    // Only the opencode gateway reports a monthly window.
+    monthlyResetAt: 'monthlyUsage',
     ...Object.fromEntries(WEEKLY_MODEL_USAGE_BUCKETS.map(bucket => [bucket.resetField, bucket.usageField]))
 };
 
@@ -294,6 +296,8 @@ function parseCachedUsageData(rawJson: string): UsageData | null {
         weeklyOpusResetAt: parsed.weeklyOpusResetAt ?? undefined,
         fableUsage: parsed.fableUsage ?? undefined,
         fableResetAt: parsed.fableResetAt ?? undefined,
+        monthlyUsage: parsed.monthlyUsage ?? undefined,
+        monthlyResetAt: parsed.monthlyResetAt ?? undefined,
         extraUsageEnabled: parsed.extraUsageEnabled ?? undefined,
         extraUsageLimit: parsed.extraUsageLimit ?? undefined,
         extraUsageUsed: parsed.extraUsageUsed ?? undefined,

@@ -10,10 +10,7 @@ import type {
     WidgetEditorDisplay,
     WidgetItem
 } from '../types/Widget';
-import {
-    formatPercent,
-    resolveNumberFormat
-} from '../utils/number-format';
+import { resolveNumberFormat } from '../utils/number-format';
 import { getUsageErrorMessage } from '../utils/usage';
 
 import { EXTRA_USAGE_DISABLED_HIDEABLE_STATE } from './shared/extra-usage-disabled';

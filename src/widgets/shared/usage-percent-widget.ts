@@ -11,10 +11,7 @@ import type {
     WidgetEditorDisplay,
     WidgetItem
 } from '../../types/Widget';
-import {
-    formatPercent,
-    resolveNumberFormat
-} from '../../utils/number-format';
+import { resolveNumberFormat } from '../../utils/number-format';
 import {
     getUsageErrorMessage,
     resolveFableUsageWindow,
