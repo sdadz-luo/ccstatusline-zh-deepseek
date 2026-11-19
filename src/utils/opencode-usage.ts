@@ -6,12 +6,14 @@ import { z } from 'zod';
 import { loadClaudeSettingsSync } from './claude-settings';
 import type { UsageData } from './usage-types';
 
-// opencode 网关通道（ANTHROPIC_BASE_URL 指向 opencode.ai/zen/go）不复用 Claude 的
+// opencode 网关通道（ANTHROPIC_BASE_URL 指向 opencode.ai/inference/go）不复用 Claude 的
 // OAuth 订阅凭据，上游用量组件在这里永远读不到 token、只能显示「无凭证」。opencode
-// go 自己的额度另有接口：GET /zen/go/v1/usage 返回三个滚动窗口的已用百分比——
+// go 自己的额度另有接口：GET /inference/go/v1/usage 返回三个滚动窗口的已用百分比——
 // 5 小时窗口 = 月额度 20%、周 = 50%、月 = 100%（https://opencode.ai/docs/go/）。
+// 2026-11-19 实测 /inference/go/v1/usage 与旧前缀 /zen/go/v1/usage 数据同构；官方文档
+// 现只提新前缀，改打新前缀以防旧前缀静默退役。
 export const OPENCODE_USAGE_API_HOST = 'opencode.ai';
-export const OPENCODE_USAGE_API_PATH = '/zen/go/v1/usage';
+export const OPENCODE_USAGE_API_PATH = '/inference/go/v1/usage';
 
 // percent 是「已用」百分比（0-100 整数），不是剩余：按 opencode 自身的记账价目
 // （其 provider 表内 deepseek-flash = $0.098/$0.196/$0.028 每 M token）换算本地

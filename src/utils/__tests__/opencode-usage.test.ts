@@ -20,7 +20,8 @@ import {
 
 vi.mock('../claude-settings', () => ({ loadClaudeSettingsSync: vi.fn(() => ({})) }));
 
-// Shape captured from a live GET /zen/go/v1/usage on 2026-09-25.
+// Shape captured from a live GET /zen/go/v1/usage on 2026-09-25; re-verified on
+// 2026-11-19 against the new /inference/go/v1/usage prefix (identical structure).
 const LIVE_RESPONSE = JSON.stringify({
     usage: {
         rolling: { status: 'ok', percent: 5, resetsAt: '2026-09-25T15:49:24.936Z' },
@@ -99,7 +100,7 @@ describe('isOpenCodeUsageSource', () => {
     });
 
     it('detects the opencode gateway from the environment base url', () => {
-        process.env.ANTHROPIC_BASE_URL = 'https://opencode.ai/zen/go';
+        process.env.ANTHROPIC_BASE_URL = 'https://opencode.ai/inference/go/anthropic';
         expect(isOpenCodeUsageSource()).toBe(true);
     });
 
@@ -113,7 +114,7 @@ describe('isOpenCodeUsageSource', () => {
 
     it('falls back to the settings env block', () => {
         delete process.env.ANTHROPIC_BASE_URL;
-        mockClaudeSettings({ env: { ANTHROPIC_BASE_URL: 'https://opencode.ai/zen/go' } });
+        mockClaudeSettings({ env: { ANTHROPIC_BASE_URL: 'https://opencode.ai/inference/go/anthropic' } });
 
         expect(isOpenCodeUsageSource()).toBe(true);
     });
