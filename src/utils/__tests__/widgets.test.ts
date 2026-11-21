@@ -8,9 +8,11 @@ import {
     DEFAULT_SETTINGS,
     type Settings
 } from '../../types/Settings';
+import type { WidgetItem } from '../../types/Widget';
 import { getHideKeybind } from '../../widgets/shared/hideable';
 import { getLabelKeybind } from '../../widgets/shared/raw-or-labeled';
 import {
+    dropRemovedWidgetTypes,
     filterWidgetCatalog,
     getAllWidgetTypes,
     getMatchSegments,
@@ -419,5 +421,57 @@ describe('label prefix', () => {
                     .toBe(`${type}/${JSON.stringify(metadata)}: has "${label}"`);
             }
         }
+    });
+});
+
+describe('removed widget cleanup', () => {
+    const makeItem = (id: string, type: string): WidgetItem => ({ id, type });
+
+    it('collapses the separators left facing each other by a removed widget', () => {
+        const line = [
+            makeItem('output-speed', 'output-speed'),
+            makeItem('sep-1', 'separator'),
+            makeItem('input-speed', 'input-speed'),
+            makeItem('sep-2', 'separator'),
+            makeItem('ttft', 'ttft'),
+            makeItem('sep-3', 'separator'),
+            makeItem('skills', 'skills')
+        ];
+
+        expect(dropRemovedWidgetTypes([line])[0]?.map(item => item.id))
+            .toEqual(['output-speed', 'sep-1', 'skills']);
+    });
+
+    it('keeps separators that were already adjacent before the removal', () => {
+        const line = [
+            makeItem('git-status', 'git-status'),
+            makeItem('sep-1', 'separator'),
+            makeItem('sep-2', 'separator'),
+            makeItem('output-speed', 'output-speed')
+        ];
+
+        expect(dropRemovedWidgetTypes([line])[0]?.map(item => item.id))
+            .toEqual(['git-status', 'sep-1', 'sep-2', 'output-speed']);
+    });
+
+    it('drops a separator exposed at the start of the line by a removal', () => {
+        const line = [
+            makeItem('ttft', 'ttft'),
+            makeItem('sep-1', 'separator'),
+            makeItem('model', 'model')
+        ];
+
+        expect(dropRemovedWidgetTypes([line])[0]?.map(item => item.id))
+            .toEqual(['model']);
+    });
+
+    it.each([
+        ['before', ['output-speed', 'separator', 'ttft', 'skills']],
+        ['after', ['output-speed', 'input-speed', 'separator', 'skills']]
+    ])('keeps one boundary when the removed widget has a separator only %s it', (_side, types) => {
+        const line = types.map((type, index) => makeItem(String(index), type));
+
+        expect(dropRemovedWidgetTypes([line])[0]?.map(item => item.type))
+            .toEqual(['output-speed', 'separator', 'skills']);
     });
 });

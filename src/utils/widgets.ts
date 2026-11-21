@@ -40,7 +40,30 @@ export function upgradeLegacyWidgetTypes(lines: WidgetItem[][]): WidgetItem[][] 
 }
 
 export function dropRemovedWidgetTypes(lines: WidgetItem[][]): WidgetItem[][] {
-    return lines.map(line => line.filter(item => !REMOVED_WIDGET_TYPES.has(item.type)));
+    return lines.map((line) => {
+        const kept: WidgetItem[] = [];
+        let removedBefore = false;
+
+        for (const item of line) {
+            if (REMOVED_WIDGET_TYPES.has(item.type)) {
+                removedBefore = true;
+                continue;
+            }
+
+            // 删除组件后它两侧的分隔符会贴在一起，渲染成一段没有内容的空档，
+            // 因此合并成一个；原本就相邻的分隔符不经过删除路径，保持原样。
+            if (removedBefore
+                && item.type === 'separator'
+                && (kept.length === 0 || kept[kept.length - 1]?.type === 'separator')) {
+                continue;
+            }
+
+            removedBefore = false;
+            kept.push(item);
+        }
+
+        return kept;
+    });
 }
 
 export function getWidget(type: WidgetItemType): Widget | null {

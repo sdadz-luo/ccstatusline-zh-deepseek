@@ -84,7 +84,7 @@ Additions over upstream powering the DeepSeek / opencode adaptations:
 - **opencode-usage.ts**: opencode go usage endpoint (`/inference/go/v1/usage`) — credential resolution and rolling/weekly/monthly window mapping
 - **usage-fetch.ts / usage-prefetch.ts**: usage source dispatch (Claude OAuth vs opencode) with per-source cache isolation
 - **speed-metrics.ts / speed-window.ts**: output-speed statistics (session average and rolling windows)
-- Fork-added widgets: OutputSpeed, TotalSpeed, MonthlyUsage. InputSpeed and TTFT widgets are removed; stale entries are dropped from settings on load
+- Fork-added widgets: OutputSpeed, TotalSpeed, MonthlyUsage. InputSpeed and TTFT widgets are removed; stale entries are dropped from settings on load, collapsing the separators left facing each other into one
 - SessionCost behaviour: time-of-use pricing (and the peak-hour red default color) activates only when the model id contains `deepseek` + `flash`; other models fall back to `cost.total_cost_usd` and stay green
 
 ### Widgets (src/widgets/)
